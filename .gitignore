@@ -9,8 +9,6 @@ out/
 
 # Eclipse
 .metadata/
-.cproject
-.project
 .settings/
 RemoteSystemsTempFiles/
 
