@@ -128,8 +128,47 @@
 #define ZCL_ATTRID_ANALOG_INPUT_STATUS_FLAGS               0x006F
 #endif
 /*--------------------------------------------------------------------
- * ZCL Basic / Identify 속성 타입 정의
- * SDK 헤더에 없으므로 여기서 직접 선언
+ * BMS Filter Config — Manufacturer-Specific 속성 (EP1, 0x0B04)
+ * Attribute ID: 0xFF00 ~ 0xFF0B (manufacturer-specific 범위)
+ * 모두 SINGLE_PREC (float, 4바이트), READ/WRITE
+ *------------------------------------------------------------------*/
+#define ZCL_ATTRID_FILTER_VOLT_MIN      0xFF00  /* 전압 하한 (V) */
+#define ZCL_ATTRID_FILTER_VOLT_MAX      0xFF01  /* 전압 상한 (V) */
+#define ZCL_ATTRID_FILTER_CURR_MIN      0xFF02  /* 전류 하한 (A, 음수=방전) */
+#define ZCL_ATTRID_FILTER_CURR_MAX      0xFF03  /* 전류 상한 (A) */
+#define ZCL_ATTRID_FILTER_TEMP_MIN      0xFF04  /* 온도 하한 (°C) */
+#define ZCL_ATTRID_FILTER_TEMP_MAX      0xFF05  /* 온도 상한 (°C) */
+#define ZCL_ATTRID_FILTER_AH_MAX        0xFF06  /* 잔량 상한 (Ah) */
+#define ZCL_ATTRID_FILTER_VOLT_RATE     0xFF07  /* 전압 rate limit (V/sample) */
+#define ZCL_ATTRID_FILTER_CURR_RATE     0xFF08  /* 전류 rate limit (A/sample) */
+#define ZCL_ATTRID_FILTER_TEMP_RATE     0xFF09  /* 온도 rate limit (°C/sample) */
+
+#define ZCL_FILTER_ATTR_NUM             10
+
+/* NV Item ID — NV_MODULE_APP 영역, APP 전용 아이템 */
+#define NV_ITEM_JUNTEK_FILTER_CFG       0x2D   /* NV_MODULE_APP 내 앱 전용 아이템 */
+
+/* 필터 설정 구조체 — NV에 저장되는 단위 */
+typedef struct {
+    float volt_min;     /* 기본: 9.0  V  */
+    float volt_max;     /* 기본: 15.6 V  */
+    float curr_min;     /* 기본: -210 A  */
+    float curr_max;     /* 기본: 130  A  */
+    float temp_min;     /* 기본: -20  °C */
+    float temp_max;     /* 기본: 60   °C */
+    float ah_max;       /* 기본: 265  Ah */
+    float volt_rate;    /* 기본: 0.5  V/sample  */
+    float curr_rate;    /* 기본: 80   A/sample  */
+    float temp_rate;    /* 기본: 2.0  °C/sample */
+} juntek_filter_cfg_t;
+
+extern juntek_filter_cfg_t g_juntek_filterCfg;
+
+void juntek_filter_cfg_load(void);
+void juntek_filter_cfg_save(void);
+
+/*--------------------------------------------------------------------
+ * ZCL Basic / Identify attribute type definition
  *------------------------------------------------------------------*/
 #ifndef ZCL_BASIC_ATTR_T_DEFINED
 #define ZCL_BASIC_ATTR_T_DEFINED

@@ -236,15 +236,132 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
 }
 
 /**********************************************************************
+ * BMS 데이터 필터링
+ *
+ * 사양: LiFePO4 4셀 직렬, 240Ah, 2kW 인버터
+ *
+ * 1단계: 범위 검사 (Range Check) — 물리적으로 불가능한 값 제거
+ * 2단계: 이전값 대비 변화량 제한 (Rate Limit) — 순간 튐 제거
+ * 3단계: 이동평균 (Moving Average, N=4) — 노이즈 평활화
+ *
+ * 범위 기준:
+ *   전압  : 4셀 × (2.5V~3.65V) = 10.0V ~ 14.6V, 여유 ±1V → 9.0~15.6V
+ *   전류  : 방전 최대 2kW÷10V=200A, 충전 최대 0.5C=120A → -210A ~ +130A
+ *   온도  : 상온 운용 -20°C ~ 60°C
+ *   잔량  : 0 ~ 240Ah (공칭 용량), 여유 10% → 0 ~ 265Ah
+ *
+ * Rate Limit 기준 (샘플 주기 ~0.5초):
+ *   전압  : 0.5초에 ±0.5V 이상 변화 불가
+ *   전류  : 2kW 인버터 돌입전류 고려 ±80A/샘플
+ *   온도  : 0.5초에 ±2°C 이상 변화 불가
+ **********************************************************************/
+
+#define BMS_FILTER_N    4   /* 이동평균 샘플 수 */
+
+/* 샘플 주기 ~0.5초 기준 rate limit은 g_juntek_filterCfg에서 참조 */
+
+typedef struct {
+    float buf[BMS_FILTER_N];
+    u8    idx;
+    u8    filled;
+    float last;
+    bool  initialized;
+} bms_filter_t;
+
+static bms_filter_t f_voltage;
+static bms_filter_t f_current;
+static bms_filter_t f_temperature;
+static bms_filter_t f_remain_ah;
+
+/* 이동평균 */
+static float filter_avg(bms_filter_t *f, float v)
+{
+    f->buf[f->idx] = v;
+    f->idx = (f->idx + 1) % BMS_FILTER_N;
+    if (f->idx == 0) f->filled = 1;
+
+    u8 n = f->filled ? BMS_FILTER_N : (f->idx ? f->idx : 1);
+    float sum = 0;
+    for (u8 i = 0; i < n; i++) sum += f->buf[i];
+    return sum / n;
+}
+
+/* 절댓값 (float) */
+static float bms_fabsf(float v) { return v < 0.0f ? -v : v; }
+
+/* 범위 검사 + rate limit + 이동평균 적용 */
+static bool bms_filter_apply(juntek_data_t *d)
+{
+    const juntek_filter_cfg_t *c = &g_juntek_filterCfg;
+
+    /* --- 1단계: 범위 검사 --- */
+    if (d->voltage < c->volt_min || d->voltage > c->volt_max) {
+        printf("BMS filter: V out %d.%02d\r\n",
+               (int)d->voltage, (int)(d->voltage * 100) % 100);
+        return false;
+    }
+    if (d->current < c->curr_min || d->current > c->curr_max) {
+        printf("BMS filter: A out\r\n");
+        return false;
+    }
+    if (d->temperature < c->temp_min || d->temperature > c->temp_max) {
+        printf("BMS filter: T out\r\n");
+        return false;
+    }
+    if (d->remain_ah < 0.0f || d->remain_ah > c->ah_max) {
+        printf("BMS filter: Ah out\r\n");
+        return false;
+    }
+
+    /* --- 2단계: Rate Limit --- */
+    if (f_voltage.initialized) {
+        if (bms_fabsf(d->voltage - f_voltage.last) > c->volt_rate) {
+            printf("BMS filter: V spike\r\n");
+            return false;
+        }
+        if (bms_fabsf(d->current - f_current.last) > c->curr_rate) {
+            printf("BMS filter: A spike\r\n");
+            return false;
+        }
+        if (bms_fabsf(d->temperature - f_temperature.last) > c->temp_rate) {
+            printf("BMS filter: T spike\r\n");
+            return false;
+        }
+    }
+
+    /* --- 3단계: 이동평균 --- */
+    d->voltage     = filter_avg(&f_voltage,     d->voltage);
+    d->current     = filter_avg(&f_current,     d->current);
+    d->temperature = filter_avg(&f_temperature, d->temperature);
+    d->remain_ah   = filter_avg(&f_remain_ah,   d->remain_ah);
+    d->power       = d->voltage * d->current;
+
+    f_voltage.last     = d->voltage;
+    f_current.last     = d->current;
+    f_temperature.last = d->temperature;
+    f_remain_ah.last   = d->remain_ah;
+
+    f_voltage.initialized     = true;
+    f_current.initialized     = true;
+    f_temperature.initialized = true;
+    f_remain_ah.initialized   = true;
+
+    return true;
+}
+
+/**********************************************************************
  * juntek_r50_process — 파싱 완료 후 처리 콜백
- * TODO: 향후 로직 구현
  **********************************************************************/
 static void juntek_r50_process(const juntek_data_t *d)
 {
-    /* ZCL 속성 업데이트 → Zigbee 리포팅 */
-    juntek_attrs_update(d);
+    juntek_data_t filtered = *d;
 
-    /* TODO: 추가 로직 (예: 알람, 릴레이 제어 등) */
+    if (!bms_filter_apply(&filtered)) {
+        return;   /* 비정상 데이터 — 무시 */
+    }
+
+    /* ZCL 속성 업데이트 → Zigbee 리포팅 */
+    juntek_attrs_update(&filtered);
 }
 
 /**********************************************************************

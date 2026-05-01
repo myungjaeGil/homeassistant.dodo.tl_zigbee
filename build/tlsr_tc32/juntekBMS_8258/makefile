@@ -114,7 +114,7 @@ clean:
 	-@echo ' '
 
 pre-build:
-	-"../../../tools/tl_link_load.sh" "../../../platform/boot/8258/boot_8258.link" "C:\Users\gilma\eclipse-workspace\tl_zigbee_sdk\build\tlsr_tc32/boot.link"
+	-"../../../tools/tl_link_load.sh" "../../../platform/boot/8258/boot_8258.link" "C:\Users\mjgil\git\homeassistant.dodo.tl_zigbee\build\tlsr_tc32/boot.link"
 	-@echo ' '
 
 post-build:

@@ -15,6 +15,8 @@
 #include "juntekMonitor.h"
 #include "juntek_ep.h"
 
+extern u8 zcl_seqNum;
+
 /*====================================================================
  * cluster_registerFunc_t 래퍼
  *
@@ -130,6 +132,87 @@ juntek_elecAttr_t g_juntek_elecAttrs = {
     .acPowerMultiplier   = 1,
     .acPowerDivisor      = 1,
 };
+
+/*====================================================================
+ * 필터 설정 — NV 저장/로드 + ZCL 속성
+ *==================================================================*/
+
+/* 기본값 */
+juntek_filter_cfg_t g_juntek_filterCfg = {
+    .volt_min   = 9.0f,
+    .volt_max   = 15.6f,
+    .curr_min   = -210.0f,
+    .curr_max   = 130.0f,
+    .temp_min   = -20.0f,
+    .temp_max   = 60.0f,
+    .ah_max     = 265.0f,
+    .volt_rate  = 0.5f,
+    .curr_rate  = 80.0f,
+    .temp_rate  = 2.0f,
+};
+
+void juntek_filter_cfg_save(void)
+{
+    nv_sts_t st = nv_flashWriteNew(1, NV_MODULE_APP,
+                                    NV_ITEM_JUNTEK_FILTER_CFG,
+                                    sizeof(juntek_filter_cfg_t),
+                                    (u8*)&g_juntek_filterCfg);
+    if (st == NV_SUCC) {
+        printf("filter cfg: saved\r\n");
+    } else {
+        printf("filter cfg: save fail %d\r\n", (int)st);
+    }
+}
+
+void juntek_filter_cfg_load(void)
+{
+    nv_sts_t st = nv_flashReadNew(1, NV_MODULE_APP,
+                                   NV_ITEM_JUNTEK_FILTER_CFG,
+                                   sizeof(juntek_filter_cfg_t),
+                                   (u8*)&g_juntek_filterCfg);
+    if (st != NV_SUCC) {
+        /* NV에 없으면 기본값 유지 후 저장 */
+        juntek_filter_cfg_save();
+        printf("filter cfg: defaults saved\r\n");
+    } else {
+        printf("filter cfg: loaded from NV\r\n");
+    }
+}
+
+/* ZCL write 콜백 — Z2M에서 write 시 NV 저장 */
+static status_t filter_cfg_writeCb(zclIncomingAddrInfo_t *pAddrInfo,
+                                    u8 cmdId, void *cmdPayload)
+{
+    (void)pAddrInfo; (void)cmdId; (void)cmdPayload;
+    juntek_filter_cfg_save();
+    printf("filter cfg: saved\r\n");
+    return ZCL_STA_SUCCESS;
+}
+
+/* 필터 설정 속성 테이블 (EP1 추가 속성) */
+static const zclAttrInfo_t filter_attrTbl[] = {
+    { ZCL_ATTRID_FILTER_VOLT_MIN,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.volt_min  },
+    { ZCL_ATTRID_FILTER_VOLT_MAX,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.volt_max  },
+    { ZCL_ATTRID_FILTER_CURR_MIN,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.curr_min  },
+    { ZCL_ATTRID_FILTER_CURR_MAX,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.curr_max  },
+    { ZCL_ATTRID_FILTER_TEMP_MIN,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.temp_min  },
+    { ZCL_ATTRID_FILTER_TEMP_MAX,   ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.temp_max  },
+    { ZCL_ATTRID_FILTER_AH_MAX,     ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.ah_max    },
+    { ZCL_ATTRID_FILTER_VOLT_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.volt_rate },
+    { ZCL_ATTRID_FILTER_CURR_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.curr_rate },
+    { ZCL_ATTRID_FILTER_TEMP_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.temp_rate },
+};
+#define ZCL_FILTER_ATTR_NUM_DEF  (sizeof(filter_attrTbl) / sizeof(zclAttrInfo_t))
+
+/* 필터 클러스터 등록 래퍼 — EP1에 별도 클러스터(0xFF00)로 등록 */
+#define ZCL_CLUSTER_JUNTEK_FILTER   0xFF00   /* manufacturer-specific cluster */
+
+static status_t filter_register(u8 ep, u16 manuCode, u8 attrNum,
+                                 const zclAttrInfo_t *tbl, cluster_forAppCb_t cb)
+{
+    return zcl_registerCluster(ep, ZCL_CLUSTER_JUNTEK_FILTER,
+                                manuCode, attrNum, tbl, NULL, cb);
+}
 
 static const zclAttrInfo_t elec_attrTbl[] = {
     { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,         ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredVoltage },
@@ -326,9 +409,10 @@ const af_simple_descriptor_t juntek_ep5_simpleDesc = {
 
 /* EP1: Electrical Measurement */
 static const zcl_specClusterInfo_t g_clusterList_ep1[] = {
-    { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,    basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
-    { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM, identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
-    { ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   MANUFACTURER_CODE_NONE, ZCL_ELEC_ATTR_NUM,     elec_attrTbl,     elec_register,         NULL                     },
+    { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,      basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
+    { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM,   identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
+    { ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   MANUFACTURER_CODE_NONE, ZCL_ELEC_ATTR_NUM,       elec_attrTbl,     elec_register,         NULL                     },
+    { ZCL_CLUSTER_JUNTEK_FILTER,               MANUFACTURER_CODE_NONE, ZCL_FILTER_ATTR_NUM_DEF, filter_attrTbl,   filter_register,       (void*)filter_cfg_writeCb},
 };
 
 /* EP2: Temperature */
@@ -389,11 +473,11 @@ void juntek_attrs_init(void)
     g_juntek_tempAttrs.measuredValue    = 0;
     g_juntek_relayAttrs.presentValue    = FALSE;
 
-    /* EP4: Metering — currentSummation(6바이트) 0으로 초기화 */
     for (i = 0; i < 6; i++) g_juntek_meteringAttrs.currentSummation[i] = 0;
-
-    /* EP5: Analog Input */
     g_juntek_analogAttrs.presentValue = 0.0f;
+
+    /* 필터 설정 NV 로드 */
+    juntek_filter_cfg_load();
 }
 
 /*====================================================================
@@ -441,4 +525,89 @@ void juntek_attrs_update(const juntek_data_t *d)
            (int)d->remain_ah, (int)(d->remain_ah * 1000) % 1000,
            (int)d->elapsed_min,
            d->relay ? "CHG" : "DCH");
+
+    /* ZCL 리포팅 — 5초마다 코디네이터로 직접 전송 */
+    {
+        static u32 s_last_report_tick = 0;
+        u32 now = clock_time();
+
+        if (!s_last_report_tick ||
+            (u32)(now - s_last_report_tick) >= 5 * 1000 * CLOCK_16M_SYS_TIMER_CLK_1MS) {
+
+            s_last_report_tick = now;
+
+            epInfo_t dstEp;
+            TL_SETSTRUCTCONTENT(dstEp, 0);
+            dstEp.dstAddrMode = APS_SHORT_DSTADDR_WITHEP;
+            dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
+            dstEp.dstEp = 1;
+            dstEp.profileId = HA_PROFILE_ID;
+
+            /* EP1: Voltage */
+            zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+                       ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,
+                       ZCL_DATA_TYPE_INT16,
+                       (u8*)&g_juntek_elecAttrs.measuredVoltage);
+
+            /* EP1: Current */
+            zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+                       ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,
+                       ZCL_DATA_TYPE_INT16,
+                       (u8*)&g_juntek_elecAttrs.measuredCurrent);
+
+            /* EP1: Power */
+            zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+                       ZCL_ATTRID_ELECTRICAL_MEAS_ACTIVE_POWER,
+                       ZCL_DATA_TYPE_INT16,
+                       (u8*)&g_juntek_elecAttrs.activePower);
+
+            /* EP2: Temperature */
+            zcl_report(JUNTEK_ENDPOINT_TEMP, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_MS_TEMPERATURE_MEASUREMENT,
+                       ZCL_ATTRID_TEMPERATURE_MEASUREMENT_MEAS_VAL,
+                       ZCL_DATA_TYPE_INT16,
+                       (u8*)&g_juntek_tempAttrs.measuredValue);
+
+            /* EP3: Relay */
+            {
+                u8 relay = g_juntek_relayAttrs.presentValue ? 1 : 0;
+                zcl_report(JUNTEK_ENDPOINT_RELAY, &dstEp, TRUE,
+                           ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                           MANUFACTURER_CODE_NONE,
+                           ZCL_CLUSTER_GEN_BINARY_INPUT_BASIC,
+                           ZCL_ATTRID_BINARY_INPUT_PRESENT_VALUE,
+                           ZCL_DATA_TYPE_BOOLEAN,
+                           &relay);
+            }
+
+            /* EP4: Metering */
+            zcl_report(JUNTEK_ENDPOINT_METERING, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_SE_METERING,
+                       ZCL_ATTRID_METERING_CURRENT_SUMMATION_DELIVERD,
+                       ZCL_DATA_TYPE_UINT48,
+                       g_juntek_meteringAttrs.currentSummation);
+
+            /* EP5: Analog */
+            zcl_report(JUNTEK_ENDPOINT_ANALOG, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_GEN_ANALOG_INPUT_BASIC,
+                       ZCL_ATTRID_ANALOG_INPUT_PRESENT_VALUE,
+                       ZCL_DATA_TYPE_SINGLE_PREC,
+                       (u8*)&g_juntek_analogAttrs.presentValue);
+        }
+    }
 }

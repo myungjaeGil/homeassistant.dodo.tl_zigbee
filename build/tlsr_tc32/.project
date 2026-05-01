@@ -118,7 +118,7 @@
 		<link>
 			<name>apps/juntekBMS</name>
 			<type>2</type>
-			<location>C:/Users/gilma/eclipse-workspace/tl_zigbee_sdk/apps/juntekBMS</location>
+			<locationURI>PARENT-2-PROJECT_LOC/apps/juntekBMS</locationURI>
 		</link>
 		<link>
 			<name>platform/boot</name>
@@ -144,6 +144,11 @@
 			<name>platform/firmware_encrypt.h</name>
 			<type>1</type>
 			<locationURI>PARENT-2-PROJECT_LOC/platform/tc32/firmware_encrypt.h</locationURI>
+		</link>
+		<link>
+			<name>platform/lib</name>
+			<type>2</type>
+			<location>C:/Users/mjgil/git/homeassistant.dodo.tl_zigbee/platform/lib</location>
 		</link>
 		<link>
 			<name>platform/libfirmware_encrypt.a</name>

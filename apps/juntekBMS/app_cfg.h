@@ -35,7 +35,7 @@ extern "C" {
 /* Debug mode */
 
 #define	UART_PRINTF_MODE                        1
-#define DEBUG_BAUDRATE              			115200//1000000//1M
+#define DEBUG_BAUDRATE              			1000000//1M
 #define USB_PRINTF_MODE                         0
 
 /* HCI interface */
