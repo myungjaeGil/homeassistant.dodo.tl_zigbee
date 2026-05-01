@@ -1,0 +1,21 @@
+################################################################################
+# Automatically-generated file. Do not edit!
+################################################################################
+
+# Add inputs and outputs from these tool invocations to the build variables 
+S_UPPER_SRCS += \
+../../../platform/boot/8278/cstartup_8278.S 
+
+OBJS += \
+./platform/boot/8278/cstartup_8278.o 
+
+
+# Each subdirectory must supply rules for building sources it contributes
+platform/boot/8278/cstartup_8278.o: ../../../platform/boot/8278/cstartup_8278.S platform/boot/8278/subdir.mk
+	@echo 'Building file: $<'
+	@echo 'Invoking: TC32 CC/Assembler'
+	tc32-elf-gcc -DMCU_CORE_8258 -DMCU_STARTUP_8258 -I../../../apps/juntekBMS -c -o "$@" "$<"
+	@echo 'Finished building: $<'
+	@echo ' '
+
+

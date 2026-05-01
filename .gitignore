@@ -1,0 +1,18 @@
+# Build outputs
+out/
+*.bin
+*.elf
+*.map
+*.d
+*.o
+*.a
+
+# Eclipse
+.metadata/
+.cproject
+.project
+.settings/
+RemoteSystemsTempFiles/
+
+# Telink
+boot.link
