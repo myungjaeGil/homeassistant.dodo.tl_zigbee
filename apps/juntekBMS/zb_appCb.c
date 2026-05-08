@@ -59,7 +59,7 @@ static s32 report_all_cb(void *arg)
 //
 //
 
-    printf("report_all: done");
+    //printf("report_all: done");
     return -1;
 }
 
@@ -70,61 +70,53 @@ ota_callBack_t sampleLight_otaCb;
 
 /*--------------------------------------------------------------------
  * Network Steering 재시도 타이머
- * [수정] 조인 성공 전까지 10초마다 반복 재시도
  *------------------------------------------------------------------*/
 static s32 steer_retry_cb(void *arg)
 {
     if (zb_isDeviceJoinedNwk()) {
-        /* 이미 조인됨 — 타이머 종료 */
-        printf("BDB: already joined, stop retry\r\n");
+        //printf("BDB: already joined, stop retry\r\n");
         return -1;
     }
-    printf("BDB: retry steering\r\n");
+    //printf("BDB: retry steering\r\n");
     bdb_networkSteerStart();
-    return 10000;   /* 10초마다 반복 */
+    return 10000;
 }
 
 /*--------------------------------------------------------------------
- * bdbInitCb: 초기화 완료 콜백
- * 시그니처: void (*bdb_initAppCb_t)(u8 status, u8 joinedNetwork)
+ * bdbInitCb
  *------------------------------------------------------------------*/
 static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
-    printf("BDB init: status=%d joined=%d factoryNew=%d\r\n",
-           status, joinedNetwork, zb_isDeviceFactoryNew());
-    printf("BDB channel: primary=0x%08x\r\n", g_bdbAttrs.primaryChannelSet);
+    //printf("BDB init: status=%d joined=%d factoryNew=%d\r\n",
+    //       status, joinedNetwork, zb_isDeviceFactoryNew());
+    //printf("BDB channel: primary=0x%08x\r\n", g_bdbAttrs.primaryChannelSet);
 
     if (joinedNetwork) {
         led_power_set_state(LED_PWR_STATE_JOINED);
-        /* 재시작 후 이미 JOIN된 상태 — 3초 후 전체 EP 상태 보고 */
         TL_ZB_TIMER_SCHEDULE(report_all_cb, NULL, 3000);
     } else {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-        printf("BDB: start steering\r\n");
+        //printf("BDB: start steering\r\n");
         bdb_networkSteerStart();
     }
 }
 
 /*--------------------------------------------------------------------
- * bdbcommissioningCb: 커미셔닝 결과 콜백
- * 시그니처: void (*bdb_commissioningAppCb_t)(u8 status, void *arg)
+ * bdbcommissioningCb
  *------------------------------------------------------------------*/
 static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
 {
-    printf("BDB commission: status=%d joined=%d\r\n", status, zb_isDeviceJoinedNwk());
+    //printf("BDB commission: status=%d joined=%d\r\n", status, zb_isDeviceJoinedNwk());
 
     if (status == BDB_COMMISSION_STA_SUCCESS) {
         led_power_set_state(LED_PWR_STATE_JOINED);
-        printf("BDB: Joined\r\n");
-        /* JOIN 후 2초 딜레이 후 전체 EP 상태 보고
-         * Z2M이 interview 완료 후 상태를 수신할 수 있도록 */
+        //printf("BDB: Joined\r\n");
         TL_ZB_TIMER_SCHEDULE(report_all_cb, NULL, 2000);
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
         /* 진행 중 */
     } else {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-        printf("BDB: fail=%d, retry 10s\r\n", status);
-        /* [수정] 10초 후 재시도 — 성공까지 반복 (steer_retry_cb 내부에서 반복) */
+        //printf("BDB: fail=%d, retry 10s\r\n", status);
         TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 10000);
     }
 }
@@ -133,10 +125,10 @@ static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
  * BDB 콜백 구조체
  *------------------------------------------------------------------*/
 bdb_appCb_t g_zbDemoBdbCb = {
-    zbdemo_bdbInitCb,           /* bdbInitCb */
-    zbdemo_bdbCommissioningCb,  /* bdbcommissioningCb */
-    NULL,                       /* bdbIdentifyCb */
-    NULL,                       /* bdbFindBindSuccessCb */
+    zbdemo_bdbInitCb,
+    zbdemo_bdbCommissioningCb,
+    NULL,
+    NULL,
 };
 
 /*--------------------------------------------------------------------
@@ -145,15 +137,13 @@ bdb_appCb_t g_zbDemoBdbCb = {
 void juntek_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-    printf("NWK: leave\r\n");
-
-    /* [수정] leave 후 자동 재조인 시도 */
+    //printf("NWK: leave\r\n");
     TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 3000);
 }
 
 void juntek_leaveCnfHandler(nlme_leave_cnf_t *pLeaveCnf)
 {
-    printf("NWK: leave cnf\r\n");
+    //printf("NWK: leave cnf\r\n");
 }
 
 bool juntek_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)

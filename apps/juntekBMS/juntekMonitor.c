@@ -195,7 +195,7 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
     }
 
     if (tcnt < 13) {
-        printf("BMS parse: token count %d < 13\r\n", tcnt);
+        //printf("BMS parse: token count %d < 13\r\n", tcnt);
         return;
     }
 
@@ -213,26 +213,26 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
 
     out->valid = true;
 
-    printf("----------------------------------------\r\n");
-    printf("BMS Voltage  >> %d.%02d V\r\n",
-           (int)out->voltage, (int)(out->voltage * 100) % 100);
-    printf("BMS Current  >> %c%d.%02d A\r\n",
-           out->current < 0 ? '-' : '+',
-           (int)(out->current < 0 ? -out->current : out->current),
-           (int)((out->current < 0 ? -out->current : out->current) * 100) % 100);
-    printf("BMS Power    >> %c%d.%01d W\r\n",
-           out->power < 0 ? '-' : '+',
-           (int)(out->power < 0 ? -out->power : out->power),
-           (int)((out->power < 0 ? -out->power : out->power) * 10) % 10);
-    printf("BMS RemainAh >> %d.%03d Ah\r\n",
-           (int)out->remain_ah,
-           (int)(out->remain_ah * 1000) % 1000);
-    printf("BMS Temp     >> %d.%01d C\r\n",
-           (int)out->temperature,
-           (int)(out->temperature < 0 ? -out->temperature : out->temperature) % 10);
-    printf("BMS Elapsed  >> %d min\r\n", (int)out->elapsed_min);
-    printf("BMS Relay    >> %s\r\n", out->relay ? "CHG" : "DCH");
-    printf("----------------------------------------\r\n");
+    //printf("----------------------------------------\r\n");
+    //printf("BMS Voltage  >> %d.%02d V\r\n",
+    //       (int)out->voltage, (int)(out->voltage * 100) % 100);
+    //printf("BMS Current  >> %c%d.%02d A\r\n",
+    //       out->current < 0 ? '-' : '+',
+    //       (int)(out->current < 0 ? -out->current : out->current),
+    //       (int)((out->current < 0 ? -out->current : out->current) * 100) % 100);
+    //printf("BMS Power    >> %c%d.%01d W\r\n",
+    //       out->power < 0 ? '-' : '+',
+    //       (int)(out->power < 0 ? -out->power : out->power),
+    //       (int)((out->power < 0 ? -out->power : out->power) * 10) % 10);
+    //printf("BMS RemainAh >> %d.%03d Ah\r\n",
+    //       (int)out->remain_ah,
+    //       (int)(out->remain_ah * 1000) % 1000);
+    //printf("BMS Temp     >> %d.%01d C\r\n",
+    //       (int)out->temperature,
+    //       (int)(out->temperature < 0 ? -out->temperature : out->temperature) % 10);
+    //printf("BMS Elapsed  >> %d min\r\n", (int)out->elapsed_min);
+    //printf("BMS Relay    >> %s\r\n", out->relay ? "CHG" : "DCH");
+    //printf("----------------------------------------\r\n");
 }
 
 /**********************************************************************
@@ -296,35 +296,35 @@ static bool bms_filter_apply(juntek_data_t *d)
 
     /* --- 1단계: 범위 검사 --- */
     if (d->voltage < c->volt_min || d->voltage > c->volt_max) {
-        printf("BMS filter: V out %d.%02d\r\n",
-               (int)d->voltage, (int)(d->voltage * 100) % 100);
+        //printf("BMS filter: V out %d.%02d\r\n",
+        //       (int)d->voltage, (int)(d->voltage * 100) % 100);
         return false;
     }
     if (d->current < c->curr_min || d->current > c->curr_max) {
-        printf("BMS filter: A out\r\n");
+        //printf("BMS filter: A out\r\n");
         return false;
     }
     if (d->temperature < c->temp_min || d->temperature > c->temp_max) {
-        printf("BMS filter: T out\r\n");
+        //printf("BMS filter: T out\r\n");
         return false;
     }
     if (d->remain_ah < 0.0f || d->remain_ah > c->ah_max) {
-        printf("BMS filter: Ah out\r\n");
+        //printf("BMS filter: Ah out\r\n");
         return false;
     }
 
     /* --- 2단계: Rate Limit --- */
     if (f_voltage.initialized) {
         if (bms_fabsf(d->voltage - f_voltage.last) > c->volt_rate) {
-            printf("BMS filter: V spike\r\n");
+            //printf("BMS filter: V spike\r\n");
             return false;
         }
         if (bms_fabsf(d->current - f_current.last) > c->curr_rate) {
-            printf("BMS filter: A spike\r\n");
+            //printf("BMS filter: A spike\r\n");
             return false;
         }
         if (bms_fabsf(d->temperature - f_temperature.last) > c->temp_rate) {
-            printf("BMS filter: T spike\r\n");
+            //printf("BMS filter: T spike\r\n");
             return false;
         }
     }
@@ -406,7 +406,7 @@ void uart_rx_poll(void)
             if (s_line_pos > 0) {
                 s_line_buf[s_line_pos] = '\0';
 
-                printf("BMS RX: %s\r\n", s_line_buf);
+                //printf("BMS RX: %s\r\n", s_line_buf);
 
                 /* :r50 파싱 */
                 juntek_data_t d = {0};
@@ -449,7 +449,7 @@ void uart_rx_init(void)
 
     myUartDriver.recvCb = uart_rx_cb;
 
-    printf("uart_rx_init done\r\n");
+    //printf("uart_rx_init done\r\n");
 }
 
 /**********************************************************************
@@ -540,7 +540,7 @@ void user_init(bool isRetention)
     /* UART RX 초기화 */
     uart_rx_init();
 
-    printf("user_init start\r\n");
+    //printf("user_init start\r\n");
 
     /* LED + 버튼 초기화 */
     juntek_hw_init();

@@ -158,9 +158,9 @@ void juntek_filter_cfg_save(void)
                                     sizeof(juntek_filter_cfg_t),
                                     (u8*)&g_juntek_filterCfg);
     if (st == NV_SUCC) {
-        printf("filter cfg: saved\r\n");
+        //printf("filter cfg: saved\r\n");
     } else {
-        printf("filter cfg: save fail %d\r\n", (int)st);
+        //printf("filter cfg: save fail %d\r\n", (int)st);
     }
 }
 
@@ -171,11 +171,10 @@ void juntek_filter_cfg_load(void)
                                    sizeof(juntek_filter_cfg_t),
                                    (u8*)&g_juntek_filterCfg);
     if (st != NV_SUCC) {
-        /* NV에 없으면 기본값 유지 후 저장 */
         juntek_filter_cfg_save();
-        printf("filter cfg: defaults saved\r\n");
+        //printf("filter cfg: defaults saved\r\n");
     } else {
-        printf("filter cfg: loaded from NV\r\n");
+        //printf("filter cfg: loaded from NV\r\n");
     }
 }
 
@@ -185,7 +184,7 @@ static status_t filter_cfg_writeCb(zclIncomingAddrInfo_t *pAddrInfo,
 {
     (void)pAddrInfo; (void)cmdId; (void)cmdPayload;
     juntek_filter_cfg_save();
-    printf("filter cfg: saved\r\n");
+    //printf("filter cfg: saved\r\n");
     return ZCL_STA_SUCCESS;
 }
 
@@ -512,19 +511,19 @@ void juntek_attrs_update(const juntek_data_t *d)
     /* EP5: Analog Input — elapsed_min (float, 분 단위) */
     g_juntek_analogAttrs.presentValue = (float)d->elapsed_min;
 
-    printf("BMS update: V=%d.%02d A=%c%d.%02d W=%c%d.%01d T=%d.%01d Ah=%d.%03d min=%d relay=%s\r\n",
-           (int)d->voltage, (int)(d->voltage * 100) % 100,
-           d->current < 0 ? '-' : '+',
-           (int)(d->current < 0 ? -d->current : d->current),
-           (int)((d->current < 0 ? -d->current : d->current) * 100) % 100,
-           d->power < 0 ? '-' : '+',
-           (int)(d->power < 0 ? -d->power : d->power),
-           (int)((d->power < 0 ? -d->power : d->power) * 10) % 10,
-           (int)d->temperature,
-           (int)(d->temperature < 0 ? -d->temperature : d->temperature) % 10,
-           (int)d->remain_ah, (int)(d->remain_ah * 1000) % 1000,
-           (int)d->elapsed_min,
-           d->relay ? "CHG" : "DCH");
+    //printf("BMS update: V=%d.%02d A=%c%d.%02d W=%c%d.%01d T=%d.%01d Ah=%d.%03d min=%d relay=%s\r\n",
+    //       (int)d->voltage, (int)(d->voltage * 100) % 100,
+    //       d->current < 0 ? '-' : '+',
+    //       (int)(d->current < 0 ? -d->current : d->current),
+    //       (int)((d->current < 0 ? -d->current : d->current) * 100) % 100,
+    //       d->power < 0 ? '-' : '+',
+    //       (int)(d->power < 0 ? -d->power : d->power),
+    //       (int)((d->power < 0 ? -d->power : d->power) * 10) % 10,
+    //       (int)d->temperature,
+    //       (int)(d->temperature < 0 ? -d->temperature : d->temperature) % 10,
+    //       (int)d->remain_ah, (int)(d->remain_ah * 1000) % 1000,
+    //       (int)d->elapsed_min,
+    //       d->relay ? "CHG" : "DCH");
 
     /* ZCL 리포팅 — 5초마다 코디네이터로 직접 전송 */
     {

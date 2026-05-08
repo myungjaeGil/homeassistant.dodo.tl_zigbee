@@ -76,11 +76,6 @@ void led_power_set_state(led_pwr_state_t state)
 
 void led_power_init(void)
 {
-    /* DEBUG TX 핀 초기화 — printf 핀 설정 */
-#ifdef DEBUG_TX_PIN_INIT
-    DEBUG_TX_PIN_INIT();
-#endif
-
     /* PC0 — LED_POWER */
     drv_gpio_func_set(LED_POWER);
     drv_gpio_output_en(LED_POWER, 1);
@@ -99,9 +94,15 @@ void led_power_init(void)
  *==================================================================*/
 void juntek_hw_init(void)
 {
+    /* DEBUG TX 핀 강제 초기화 */
+    gpio_set_func(GPIO_PD7, AS_GPIO);
+    gpio_set_output_en(GPIO_PD7, 1);
+    gpio_set_input_en(GPIO_PD7, 0);
+    gpio_write(GPIO_PD7, 1);
+
     led_power_init();
     led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-    printf("juntek_hw_init done\r\n");
+    //printf("juntek_hw_init done\r\n");
 }
 
 /*====================================================================
