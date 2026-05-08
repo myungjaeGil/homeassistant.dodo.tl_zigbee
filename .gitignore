@@ -5,12 +5,12 @@ out/
 *.map
 *.d
 *.o
-*.a
 
 # Eclipse
 .metadata/
 .settings/
 RemoteSystemsTempFiles/
+build/tlsr_tc32/juntekBMS_8258
 
 # Telink
 boot.link
