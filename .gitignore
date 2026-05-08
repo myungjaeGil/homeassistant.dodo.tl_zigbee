@@ -14,3 +14,7 @@ build/tlsr_tc32/juntekBMS_8258
 
 # Telink
 boot.link
+
+# Build target folders
+build/
+!build/tlsr_tc32/boot.link

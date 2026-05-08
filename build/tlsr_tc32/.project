@@ -111,6 +111,11 @@
 			<locationURI>PARENT-2-PROJECT_LOC/zigbee</locationURI>
 		</link>
 		<link>
+			<name>apps/5chPWM</name>
+			<type>2</type>
+			<locationURI>PARENT-2-PROJECT_LOC/apps/5chPWM</locationURI>
+		</link>
+		<link>
 			<name>apps/common</name>
 			<type>2</type>
 			<locationURI>PARENT-2-PROJECT_LOC/apps/common</locationURI>
@@ -148,7 +153,7 @@
 		<link>
 			<name>platform/lib</name>
 			<type>2</type>
-			<location>C:/Users/mjgil/git/homeassistant.dodo.tl_zigbee/platform/lib</location>
+			<locationURI>PROJECT_LOC</locationURI>
 		</link>
 		<link>
 			<name>platform/libfirmware_encrypt.a</name>
