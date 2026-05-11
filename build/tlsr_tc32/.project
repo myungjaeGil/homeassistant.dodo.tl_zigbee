@@ -121,6 +121,11 @@
 			<locationURI>PARENT-2-PROJECT_LOC/apps/common</locationURI>
 		</link>
 		<link>
+			<name>apps/epeverMonitor</name>
+			<type>2</type>
+			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/epeverMonitor</location>
+		</link>
+		<link>
 			<name>apps/juntekBMS</name>
 			<type>2</type>
 			<locationURI>PARENT-2-PROJECT_LOC/apps/juntekBMS</locationURI>
