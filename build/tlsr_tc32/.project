@@ -123,7 +123,7 @@
 		<link>
 			<name>apps/epeverMonitor</name>
 			<type>2</type>
-			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/epeverMonitor</location>
+			<locationURI>PARENT-2-PROJECT_LOC//apps/epeverMonitor</locationURI>
 		</link>
 		<link>
 			<name>apps/juntekBMS</name>
