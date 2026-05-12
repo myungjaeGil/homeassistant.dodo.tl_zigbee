@@ -24,8 +24,10 @@ static s32 steer_retry_cb(void *arg)
 {
     (void)arg;
     if (zb_isDeviceJoinedNwk()) {
+        printf("[ZB] steer_retry: already joined, stop\r\n");
         return -1;
     }
+    printf("[ZB] steer_retry: start NetworkSteer\r\n");
     bdb_networkSteerStart();
     return 10000;
 }
@@ -35,9 +37,14 @@ static s32 steer_retry_cb(void *arg)
  *------------------------------------------------------------------*/
 static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
+    printf("[ZB] bdbInitCb: status=%d joinedNetwork=%d\r\n",
+           (int)status, (int)joinedNetwork);
     if (joinedNetwork) {
+        printf("[ZB] Already joined. ShortAddr=%d\r\n",
+               (int)zb_getLocalShortAddr());
         led_power_set_state(LED_PWR_STATE_JOINED);
     } else {
+        printf("[ZB] Not joined -> start Network Steering\r\n");
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         bdb_networkSteerStart();
     }
@@ -49,11 +56,16 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
 {
     (void)arg;
+    printf("[ZB] CommissioningCb: status=%d\r\n", (int)status);
     if (status == BDB_COMMISSION_STA_SUCCESS) {
+        printf("[ZB] Joined! ShortAddr=%d\r\n",
+               (int)zb_getLocalShortAddr());
         led_power_set_state(LED_PWR_STATE_JOINED);
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
-        /* 진행 중 */
+        printf("[ZB] Steering in progress...\r\n");
     } else {
+        printf("[ZB] Steering failed (sta=%d) -> retry in 10s\r\n",
+               (int)status);
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 10000);
     }
@@ -75,6 +87,7 @@ bdb_appCb_t g_zbDemoBdbCb = {
 void epever_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     (void)pLeaveInd;
+    printf("[ZB] LeaveInd -> not joined, steer in 3s\r\n");
     led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 3000);
 }
@@ -93,6 +106,8 @@ bool epever_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)
 void epever_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
 {
     if (pNwkStatusInd) {
+        printf("[ZB] NwkStatusInd: status=%d\r\n",
+               (int)pNwkStatusInd->status);
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     }
 }

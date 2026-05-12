@@ -49,7 +49,7 @@ _attribute_ram_code_ void soft_uart_putc(unsigned char byte)
     bit[7] = ((byte >> 6) & 0x01) ? tmp_bit1 : tmp_bit0;
     bit[8] = ((byte >> 7) & 0x01) ? tmp_bit1 : tmp_bit0;
     bit[9] = tmp_bit1;
-    //u32 r = drv_disable_irq();
+    u32 r = drv_disable_irq();
     t1 = clock_time();
     for (j = 0; j < 10; j++) {
         t2 = t1;
@@ -58,7 +58,7 @@ _attribute_ram_code_ void soft_uart_putc(unsigned char byte)
         }
         TX_PIN_OUTPUT_REG = bit[j];
     }
-    //drv_restore_irq(r);
+    drv_restore_irq(r);
 }
 #endif
 

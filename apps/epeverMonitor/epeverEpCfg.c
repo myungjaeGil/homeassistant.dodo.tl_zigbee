@@ -420,6 +420,8 @@ void epever_attrs_update(const epever_data_t *d)
 
             s_last_report_tick = now;
 
+            printf("[ZCL] Report EP1-5 to coord\r\n");
+
             epInfo_t dstEp;
             TL_SETSTRUCTCONTENT(dstEp, 0);
             dstEp.dstAddrMode       = APS_SHORT_DSTADDR_WITHEP;
