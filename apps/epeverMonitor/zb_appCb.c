@@ -13,8 +13,26 @@
 #include "factory_reset.h"
 
 /*--------------------------------------------------------------------
- * OTA 콜백 — 더미
+ * OTA 콜백 — SDK ota_callBack_t 구조체 필드 확인 필요
+ * 현재는 빈 선언으로 두고 OTA 이벤트는 별도 함수로 처리
  *------------------------------------------------------------------*/
+void epever_otaProcessMsgHandler(u8 evt, u8 *arg)
+{
+    (void)arg;
+    switch (evt) {
+    case OTA_EVT_START:
+        printf("[OTA] Start\r\n");
+        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
+        break;
+    case OTA_EVT_COMPLETE:
+        printf("[OTA] Complete -> reboot\r\n");
+        break;
+    default:
+        printf("[OTA] evt=%d\r\n", (int)evt);
+        break;
+    }
+}
+
 ota_callBack_t sampleLight_otaCb;
 
 /*--------------------------------------------------------------------

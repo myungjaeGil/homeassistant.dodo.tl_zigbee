@@ -134,7 +134,7 @@ extern "C" {
 #define ZCL_POLL_CTRL_SUPPORT                   0
 #define ZCL_GROUP_SUPPORT                       0
 #define ZCL_SCENE_SUPPORT                       0
-#define ZCL_OTA_SUPPORT                         0
+#define ZCL_OTA_SUPPORT                         1
 #define ZCL_GP_SUPPORT                          1
 //test
 #define AF_TEST_ENABLE                          0

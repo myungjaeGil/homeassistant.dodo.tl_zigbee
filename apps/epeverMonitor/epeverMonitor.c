@@ -103,8 +103,10 @@ extern drv_uart_t myUartDriver;
  */
 #define EP_MODBUS_SLAVE_ID      0x01
 #define EP_MODBUS_FUNC_READ     0x04
-#define EP_POLL_INTERVAL_MS     10000       /* 10초 주기       */
 #define EP_RSP_TIMEOUT_MS       500         /* 응답 타임아웃   */
+
+/* 폴링 주기 — HA UI에서 변경 가능, 기본 10초 */
+u32 g_poll_interval_ms = 10000;
 
 /* 폴링 구간 1: Solar + Battery  0x3100~0x3107 (8개) */
 #define EP_READ1_ADDR           0x3100
@@ -421,7 +423,7 @@ static s32 epever_poll_timer_cb(void *arg)
     /* 누적 데이터 초기화 후 구간1 송신 */
     memset(&s_poll_data, 0, sizeof(s_poll_data));
     epever_send_req(EP_READ1_ADDR, EP_READ1_COUNT, EP_STATE_WAIT_RSP1);
-    return EP_POLL_INTERVAL_MS;
+    return (s32)g_poll_interval_ms;
 }
 
 /**********************************************************************
@@ -653,6 +655,11 @@ static void user_app_init(void)
 
     epever_attrs_init();
 
+    /* NV 복원된 poll_interval 적용 */
+    if (g_epever_cfgAttrs.pollInterval >= 5 && g_epever_cfgAttrs.pollInterval <= 3600) {
+        g_poll_interval_ms = (u32)g_epever_cfgAttrs.pollInterval * 1000;
+    }
+
     for (i = 0; i < EPEVER_EP_COUNT; i++) {
         zcl_register(ep_list[i], g_epClusterNum[i],
                      (zcl_specClusterInfo_t *)g_epClusterList[i]);
@@ -664,7 +671,20 @@ static void user_app_init(void)
 }
 
 /**********************************************************************
- * epever_modbus_timeout_poll
+ * epever_set_poll_interval — HA UI에서 poll 주기 변경 시 호출
+ * epeverEpCfg.c의 cfg write 콜백에서 호출됨
+ */
+void epever_set_poll_interval(u16 sec)
+{
+    /* ms 단위로 변환하여 전역 변수 업데이트
+     * poll_timer_cb의 return 값이 다음 주기를 결정하므로
+     * 변수만 바꾸면 다음 주기부터 적용됨 */
+    g_poll_interval_ms = (u32)sec * 1000;
+    printf("[CFG] poll interval -> %d ms\r\n", (int)g_poll_interval_ms);
+}
+
+
+/**
  * app_task()에서 매 루프 호출 — RX 없이도 타임아웃/재시도 처리
  */
 static void epever_modbus_timeout_poll(void)
@@ -743,7 +763,7 @@ void user_init(bool isRetention)
     printf(" RS485 115200 8N1 ID=%d\r\n",
            (int)EP_MODBUS_SLAVE_ID);
     printf(" Poll=%dms Ret=%d\r\n",
-           (int)EP_POLL_INTERVAL_MS, (int)isRetention);
+           (int)g_poll_interval_ms, (int)isRetention);
     printf("========================================\r\n");
 
     /* LED + 버튼 초기화 */

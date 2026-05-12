@@ -41,6 +41,13 @@ static status_t analog_register(u8 ep, u16 manuCode, u8 attrNum,
                                 manuCode, attrNum, tbl, NULL, cb);
 }
 
+static status_t cfg_register(u8 ep, u16 manuCode, u8 attrNum,
+                              const zclAttrInfo_t *tbl, cluster_forAppCb_t cb)
+{
+    return zcl_registerCluster(ep, ZCL_CLUSTER_EPEVER_CFG,
+                                manuCode, attrNum, tbl, NULL, cb);
+}
+
 /*====================================================================
  * Basic / Identify 속성
  *==================================================================*/
@@ -208,14 +215,65 @@ static const zclAttrInfo_t soc_attrTbl[] = {
 #define ZCL_SOC_ATTR_NUM  (sizeof(soc_attrTbl) / sizeof(zclAttrInfo_t))
 
 /*====================================================================
- * Simple Descriptor
+ * Manufacturer-Specific Cluster 0xFF00 — EPever 설정
+ * EP1에 추가, poll_interval writable
  *==================================================================*/
+
+/* NV 저장용 ID — NV_MODULE_APP 영역 */
+#define NV_ITEM_EPEVER_CFG      0x2D   /* APP 전용 아이템 */
+
+epever_cfgAttr_t g_epever_cfgAttrs = {
+    .pollInterval = 10,   /* 기본값 10초 */
+};
+
+static const zclAttrInfo_t cfg_attrTbl[] = {
+    { ZCL_ATTRID_EPEVER_POLL_INTERVAL, ZCL_DATA_TYPE_UINT16,
+      ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE,
+      (u8*)&g_epever_cfgAttrs.pollInterval },
+    { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,
+      ACCESS_CONTROL_READ,
+      (u8*)&zcl_attr_global_clusterRevision },
+};
+#define ZCL_CFG_ATTR_NUM  (sizeof(cfg_attrTbl) / sizeof(zclAttrInfo_t))
+
+/* poll_interval write 콜백 — epeverMonitor.c의 함수 호출 */
+extern void epever_set_poll_interval(u16 sec);
+
+static status_t epever_cfgCb(zclIncomingAddrInfo_t *pAddrInfo,
+                              u8 cmdId, void *cmdPayload)
+{
+    if (cmdId == ZCL_CMD_WRITE || cmdId == ZCL_CMD_WRITE_NO_RSP) {
+        zclWriteCmd_t *pWrite = (zclWriteCmd_t *)cmdPayload;
+        u8 i;
+        for (i = 0; i < pWrite->numAttr; i++) {
+            if (pWrite->attrList[i].attrID == ZCL_ATTRID_EPEVER_POLL_INTERVAL) {
+                u16 sec = BUILD_U16(pWrite->attrList[i].attrData[0],
+                                    pWrite->attrList[i].attrData[1]);
+                /* 범위 제한: 5초 ~ 3600초 */
+                if (sec < 5)    sec = 5;
+                if (sec > 3600) sec = 3600;
+                g_epever_cfgAttrs.pollInterval = sec;
+                epever_set_poll_interval(sec);
+                printf("[CFG] poll_interval=%d sec\r\n", (int)sec);
+                /* NV 저장 */
+                nv_flashWriteNew(1, NV_MODULE_APP,
+                                 NV_ITEM_EPEVER_CFG,
+                                 sizeof(epever_cfgAttr_t),
+                                 (u8*)&g_epever_cfgAttrs);
+            }
+        }
+    }
+    return ZCL_STA_SUCCESS;
+}
+
+
 
 /* EP1: Solar */
 static const u16 ep1_inClusterList[] = {
     ZCL_CLUSTER_GEN_BASIC,
     ZCL_CLUSTER_GEN_IDENTIFY,
     ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+    ZCL_CLUSTER_EPEVER_CFG,
 };
 static const u16 ep1_outClusterList[] = {
 #ifdef ZCL_OTA
@@ -315,6 +373,7 @@ static const zcl_specClusterInfo_t g_clusterList_ep1[] = {
     { ZCL_CLUSTER_GEN_BASIC,                 MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,    basic_attrTbl,    zcl_basic_register,    (void*)epever_basicCb    },
     { ZCL_CLUSTER_GEN_IDENTIFY,              MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM, identify_attrTbl, zcl_identify_register, (void*)epever_identifyCb },
     { ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT, MANUFACTURER_CODE_NONE, ZCL_SOLAR_ATTR_NUM,    solar_attrTbl,    elec_register,         NULL                     },
+    { ZCL_CLUSTER_EPEVER_CFG,                MANUFACTURER_CODE_NONE, ZCL_CFG_ATTR_NUM,      cfg_attrTbl,      cfg_register,          (void*)epever_cfgCb      },
 };
 
 /* EP2: Battery Electrical Measurement */
@@ -380,6 +439,22 @@ void epever_attrs_init(void)
 
     g_epever_tempAttrs.measuredValue      = 0;
     g_epever_socAttrs.presentValue        = 0.0f;
+
+    /* NV에서 poll_interval 복원 */
+    {
+        epever_cfgAttr_t saved;
+        nv_sts_t st = nv_flashReadNew(1, NV_MODULE_APP,
+                                      NV_ITEM_EPEVER_CFG,
+                                      sizeof(epever_cfgAttr_t),
+                                      (u8*)&saved);
+        if (st == NV_SUCC) {
+            if (saved.pollInterval >= 5 && saved.pollInterval <= 3600) {
+                g_epever_cfgAttrs.pollInterval = saved.pollInterval;
+                printf("[CFG] NV restored poll_interval=%d sec\r\n",
+                       (int)saved.pollInterval);
+            }
+        }
+    }
 }
 
 /*====================================================================

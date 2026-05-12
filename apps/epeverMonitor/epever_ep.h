@@ -224,6 +224,19 @@ status_t epever_basicCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPay
 status_t epever_identifyCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload);
 
 /*--------------------------------------------------------------------
+ * Manufacturer-Specific Cluster 0xFF00 — EPever 설정
+ * EP1에만 등록, poll_interval (초 단위, 5~3600)
+ *------------------------------------------------------------------*/
+#define ZCL_CLUSTER_EPEVER_CFG              0xFF00
+#define ZCL_ATTRID_EPEVER_POLL_INTERVAL     0x0001  /* uint16, R/W, 단위: 초 */
+
+typedef struct {
+    u16 pollInterval;   /* RS485 폴링 주기 (초), 기본 10 */
+} epever_cfgAttr_t;
+
+extern epever_cfgAttr_t g_epever_cfgAttrs;
+
+/*--------------------------------------------------------------------
  * 속성 초기화 / 업데이트
  *------------------------------------------------------------------*/
 void epever_attrs_init(void);
