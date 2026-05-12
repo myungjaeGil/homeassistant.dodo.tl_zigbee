@@ -103,10 +103,20 @@ extern drv_uart_t myUartDriver;
  */
 #define EP_MODBUS_SLAVE_ID      0x01
 #define EP_MODBUS_FUNC_READ     0x04
-#define EP_READ_START_ADDR      0x3100
-#define EP_READ_COUNT           27          /* 0x3100 ~ 0x311A */
 #define EP_POLL_INTERVAL_MS     10000       /* 10초 주기       */
 #define EP_RSP_TIMEOUT_MS       500         /* 응답 타임아웃   */
+
+/* 폴링 구간 1: Solar + Battery  0x3100~0x3107 (8개) */
+#define EP_READ1_ADDR           0x3100
+#define EP_READ1_COUNT          8
+
+/* 폴링 구간 2: Load + Temp      0x310C~0x3111 (6개) */
+#define EP_READ2_ADDR           0x310C
+#define EP_READ2_COUNT          6
+
+/* 폴링 구간 3: SOC              0x311A (1개) */
+#define EP_READ3_ADDR           0x311A
+#define EP_READ3_COUNT          1
 
 /**********************************************************************
  * CRC16 (Modbus)
@@ -145,66 +155,79 @@ static void modbus_build_request(u8 *buf, u8 slave_id, u8 func,
 }
 
 /**********************************************************************
- * Modbus RTU 응답 파서
- *
- * 응답: [ID][FC][ByteCnt][D0H][D0L]...[CRCL][CRCH]
+ * 구간별 응답 파서 공통 매크로
  */
-static bool epever_parse_response(const u8 *buf, u16 buf_len,
-                                   epever_data_t *out)
+#define REG_BE(d, i)  ((u16)(((d)[(i)*2] << 8) | (d)[(i)*2+1]))
+
+/* 구간1: 0x3100~0x3107 — Solar V/I/P, Battery V/I/P */
+static bool epever_parse_rsp1(const u8 *buf, u16 buf_len, epever_data_t *out)
 {
-    out->valid = false;
-
-    /* 최소 길이: 3(헤더) + EP_READ_COUNT×2 + 2(CRC) */
-    u16 expected = 3 + EP_READ_COUNT * 2 + 2;
+    u16 expected = 3 + EP_READ1_COUNT * 2 + 2;
     if (buf_len < expected) return false;
-
     if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
     if (buf[1] != EP_MODBUS_FUNC_READ) return false;
-    if (buf[2] != EP_READ_COUNT * 2)   return false;
-
-    /* CRC 검증 */
+    if (buf[2] != EP_READ1_COUNT * 2)  return false;
     u16 crc_calc = modbus_crc16(buf, expected - 2);
-    u16 crc_recv = ((u16)buf[expected - 1] << 8) | buf[expected - 2];
+    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
     if (crc_calc != crc_recv) return false;
 
-    /* 레지스터 추출 — buf[3] 부터 2바이트씩 (Big-endian) */
     const u8 *d = buf + 3;
-
-    #define REG(offset)  ((u16)(((d)[(offset)*2] << 8) | (d)[(offset)*2+1]))
-    #define OFFSET(addr) ((addr) - EP_READ_START_ADDR)
-
-    out->solar_volt = REG(OFFSET(0x3100)) / 100.0f;
-    out->solar_curr = REG(OFFSET(0x3101)) / 100.0f;
-
-    /* 32bit 전력: H×65536 + L, ÷100 = W */
-    u32 sol_pow = ((u32)REG(OFFSET(0x3103)) << 16) | REG(OFFSET(0x3102));
-    out->solar_pow  = sol_pow / 100.0f;
-
-    out->bat_volt   = REG(OFFSET(0x3104)) / 100.0f;
-    out->bat_curr   = REG(OFFSET(0x3105)) / 100.0f;
-
-    u32 chg_pow = ((u32)REG(OFFSET(0x3107)) << 16) | REG(OFFSET(0x3106));
-    out->chg_pow    = chg_pow / 100.0f;
-
-    out->load_volt  = REG(OFFSET(0x310C)) / 100.0f;
-    out->load_curr  = REG(OFFSET(0x310D)) / 100.0f;
-
-    u32 load_pow = ((u32)REG(OFFSET(0x310F)) << 16) | REG(OFFSET(0x310E));
-    out->load_pow   = load_pow / 100.0f;
-
-    out->bat_temp   = REG(OFFSET(0x3110)) / 100.0f;
-    out->dev_temp   = REG(OFFSET(0x3111)) / 100.0f;
-    out->bat_soc    = (u8)REG(OFFSET(0x311A));
-
-    #undef REG
-    #undef OFFSET
-
-    out->valid = true;
+    out->solar_volt = REG_BE(d, 0) / 100.0f;  /* 0x3100 */
+    out->solar_curr = REG_BE(d, 1) / 100.0f;  /* 0x3101 */
+    u32 sol_pow = ((u32)REG_BE(d, 3) << 16) | REG_BE(d, 2);
+    out->solar_pow  = sol_pow / 100.0f;        /* 0x3102~3103 */
+    out->bat_volt   = REG_BE(d, 4) / 100.0f;  /* 0x3104 */
+    out->bat_curr   = REG_BE(d, 5) / 100.0f;  /* 0x3105 */
+    u32 chg_pow = ((u32)REG_BE(d, 7) << 16) | REG_BE(d, 6);
+    out->chg_pow    = chg_pow / 100.0f;        /* 0x3106~3107 */
     return true;
 }
 
+/* 구간2: 0x310C~0x3111 — Load V/I/P, Bat/Dev Temp */
+static bool epever_parse_rsp2(const u8 *buf, u16 buf_len, epever_data_t *out)
+{
+    u16 expected = 3 + EP_READ2_COUNT * 2 + 2;
+    if (buf_len < expected) return false;
+    if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
+    if (buf[1] != EP_MODBUS_FUNC_READ) return false;
+    if (buf[2] != EP_READ2_COUNT * 2)  return false;
+    u16 crc_calc = modbus_crc16(buf, expected - 2);
+    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
+    if (crc_calc != crc_recv) return false;
+
+    const u8 *d = buf + 3;
+    out->load_volt = REG_BE(d, 0) / 100.0f;   /* 0x310C */
+    out->load_curr = REG_BE(d, 1) / 100.0f;   /* 0x310D */
+    u32 load_pow = ((u32)REG_BE(d, 3) << 16) | REG_BE(d, 2);
+    out->load_pow  = load_pow / 100.0f;        /* 0x310E~310F */
+    out->bat_temp  = REG_BE(d, 4) / 100.0f;   /* 0x3110 */
+    out->dev_temp  = REG_BE(d, 5) / 100.0f;   /* 0x3111 */
+    return true;
+}
+
+/* 구간3: 0x311A — Battery SOC % */
+static bool epever_parse_rsp3(const u8 *buf, u16 buf_len, epever_data_t *out)
+{
+    u16 expected = 3 + EP_READ3_COUNT * 2 + 2;
+    if (buf_len < expected) return false;
+    if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
+    if (buf[1] != EP_MODBUS_FUNC_READ) return false;
+    if (buf[2] != EP_READ3_COUNT * 2)  return false;
+    u16 crc_calc = modbus_crc16(buf, expected - 2);
+    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
+    if (crc_calc != crc_recv) return false;
+
+    const u8 *d = buf + 3;
+    out->bat_soc = (u8)REG_BE(d, 0);          /* 0x311A */
+    out->valid   = true;
+    return true;
+}
+
+#undef REG_BE
+
 /* forward declaration */
 static s32 epever_rated_start_cb(void *arg);
+static s32 epever_poll_timer_cb(void *arg);
 
 /**********************************************************************
  * Rated Datum 레지스터 설정
@@ -221,15 +244,20 @@ static s32 epever_rated_start_cb(void *arg);
  * WAIT_RSP   : 실시간 데이터 응답 대기
  */
 typedef enum {
-    EP_STATE_RATED_REQ = 0, /* 부팅 시 Rated Datum 요청 */
-    EP_STATE_RATED_WAIT,    /* Rated Datum 응답 대기    */
-    EP_STATE_IDLE,          /* 대기                     */
-    EP_STATE_WAIT_RSP,      /* 실시간 데이터 응답 대기  */
+    EP_STATE_RATED_REQ  = 0,
+    EP_STATE_RATED_WAIT,
+    EP_STATE_IDLE,
+    EP_STATE_WAIT_RSP1,     /* 구간1: Solar+Battery 응답 대기 */
+    EP_STATE_WAIT_RSP2,     /* 구간2: Load+Temp 응답 대기     */
+    EP_STATE_WAIT_RSP3,     /* 구간3: SOC 응답 대기           */
 } ep_modbus_state_t;
 
-static ep_modbus_state_t s_ep_state      = EP_STATE_RATED_REQ;
-static u32               s_req_time      = 0;
-static bool              s_rated_done    = false; /* Rated Datum 읽기 완료 여부 */
+static ep_modbus_state_t s_ep_state   = EP_STATE_RATED_REQ;
+static u32               s_req_time   = 0;
+static bool              s_rated_done = false;
+
+/* 3구간 수신 데이터 누적용 */
+static epever_data_t     s_poll_data  = {0};
 
 /**********************************************************************
  * Rated Datum 파서
@@ -357,46 +385,42 @@ static void epever_rated_request_send(void)
 }
 
 /**********************************************************************
- * epever_request_send — 실시간 데이터 Modbus 요청 송신
+ * 구간별 Modbus 요청 송신
  */
-static void epever_request_send(void)
+static void epever_send_req(u16 addr, u16 cnt, ep_modbus_state_t next_state)
 {
     u8 buf[12];
-    buf[0] = 8; buf[1] = 0; buf[2] = 0; buf[3] = 0;  /* len=8 */
+    buf[0] = 8; buf[1] = 0; buf[2] = 0; buf[3] = 0;
     modbus_build_request(buf + 4, EP_MODBUS_SLAVE_ID, EP_MODBUS_FUNC_READ,
-                          EP_READ_START_ADDR, EP_READ_COUNT);
-
+                         addr, cnt);
     uart_dma_send(buf);
-
-    s_ep_state = EP_STATE_WAIT_RSP;
+    s_ep_state = next_state;
     s_req_time = clock_time();
-    {
-        u8 *req = buf + 4;
-        u16 addr = (u16)((req[2] << 8) | req[3]);
-        u16 cnt  = (u16)((req[4] << 8) | req[5]);
-        printf("[485 TX] Poll: ID=%d FC=%d Addr=%d Cnt=%d CRC=%d %d\r\n",
-               (int)req[0], (int)req[1],
-               (int)addr, (int)cnt,
-               (int)req[6], (int)req[7]);
-    }
+
+    u8 *req = buf + 4;
+    printf("[485 TX] Addr=%d Cnt=%d CRC=%d %d\r\n",
+           (int)addr, (int)cnt,
+           (int)req[6], (int)req[7]);
 }
 
 /**********************************************************************
- * 폴링 타이머 콜백 — EP_POLL_INTERVAL_MS 마다 호출
+ * 폴링 타이머 콜백 — EP_POLL_INTERVAL_MS 마다 구간1 시작
  */
 static s32 epever_poll_timer_cb(void *arg)
 {
     (void)arg;
 
     if (s_ep_state != EP_STATE_IDLE) {
-        printf("[485] prev rsp not done (state=%d), force idle & retry\r\n",
+        printf("[485] prev not done (state=%d), force idle\r\n",
                (int)s_ep_state);
         s_ep_state = EP_STATE_IDLE;
         uart_rx_flag = 0;
         uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
     }
 
-    epever_request_send();
+    /* 누적 데이터 초기화 후 구간1 송신 */
+    memset(&s_poll_data, 0, sizeof(s_poll_data));
+    epever_send_req(EP_READ1_ADDR, EP_READ1_COUNT, EP_STATE_WAIT_RSP1);
     return EP_POLL_INTERVAL_MS;
 }
 
@@ -434,6 +458,18 @@ void uart_rx_poll(void)
         printf("[485 RX] Rated rsp: len=%d elapsed=%d ms\r\n",
                (int)len, (int)elapsed);
         uart_rx_flag = 0;
+
+        /* Modbus 에러 응답 감지 */
+        if (len == 5 && data[1] & 0x80) {
+            printf("[485 RX] Rated Modbus ERR: ExCode=%d -> skip rated\r\n",
+                   (int)data[2]);
+            s_rated_done = true;
+            s_ep_state   = EP_STATE_IDLE;
+            uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+            TL_ZB_TIMER_SCHEDULE(epever_poll_timer_cb, NULL, 1000);
+            return;
+        }
+
         if (len > 0 && len <= (UART_BUF_SIZE - 4)) {
             epever_parse_rated(data, len);
         }
@@ -449,7 +485,9 @@ void uart_rx_poll(void)
     }
 
     /* 실시간 데이터 응답 처리 */
-    if (s_ep_state != EP_STATE_WAIT_RSP) {
+    if (s_ep_state != EP_STATE_WAIT_RSP1 &&
+        s_ep_state != EP_STATE_WAIT_RSP2 &&
+        s_ep_state != EP_STATE_WAIT_RSP3) {
         uart_rx_flag = 0;
         uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
         return;
@@ -458,7 +496,8 @@ void uart_rx_poll(void)
     u32 elapsed = (u32)((clock_time() - s_req_time)
                         / CLOCK_16M_SYS_TIMER_CLK_1MS);
     if (elapsed > EP_RSP_TIMEOUT_MS) {
-        printf("[485 RX] Poll rsp timeout (%d ms)\r\n", (int)elapsed);
+        printf("[485 RX] timeout state=%d (%d ms)\r\n",
+               (int)s_ep_state, (int)elapsed);
         s_ep_state = EP_STATE_IDLE;
         uart_rx_flag = 0;
         uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
@@ -468,43 +507,80 @@ void uart_rx_poll(void)
     uart_rx_flag = 0;
 
     if (len == 0 || len > (UART_BUF_SIZE - 4)) {
-        printf("[485 RX] Bad len=%d, discard\r\n", (int)len);
+        printf("[485 RX] Bad len=%d\r\n", (int)len);
         s_ep_state = EP_STATE_IDLE;
         uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
         return;
     }
 
-    printf("[485 RX] Poll rsp: len=%d elapsed=%d ms\r\n",
-           (int)len, (int)elapsed);
-
-    epever_data_t d = {0};
-    if (epever_parse_response(data, len, &d)) {
-        epever_attrs_update(&d);
-        /* TC32: %f 미지원 → 정수 변환 출력 */
-        printf("[485 RX] OK  Sol=%d.%02dV/%d.%02dA/%dW"
-               "  Bat=%d.%02dV/%d.%02dA/%dW  SOC=%d%%"
-               "  Ld=%d.%02dV/%d.%02dA/%dW  BatT=%d.%02dC\r\n",
-               (int)d.solar_volt,  (int)((d.solar_volt  - (int)d.solar_volt)  * 100),
-               (int)d.solar_curr,  (int)((d.solar_curr  - (int)d.solar_curr)  * 100),
-               (int)d.solar_pow,
-               (int)d.bat_volt,    (int)((d.bat_volt    - (int)d.bat_volt)    * 100),
-               (int)d.bat_curr,    (int)((d.bat_curr    - (int)d.bat_curr)    * 100),
-               (int)d.chg_pow,
-               (int)d.bat_soc,
-               (int)d.load_volt,   (int)((d.load_volt   - (int)d.load_volt)   * 100),
-               (int)d.load_curr,   (int)((d.load_curr   - (int)d.load_curr)   * 100),
-               (int)d.load_pow,
-               (int)d.bat_temp,    (int)((d.bat_temp    - (int)d.bat_temp)    * 100));
-    } else {
-        printf("[485 RX] Parse FAIL len=%d  hdr=%d %d %d\r\n",
-               (int)len,
-               len > 0 ? (int)data[0] : 0,
-               len > 1 ? (int)data[1] : 0,
-               len > 2 ? (int)data[2] : 0);
+    /* Modbus 에러 응답 감지 */
+    if (len >= 3 && (data[1] & 0x80)) {
+        u8 exc = data[2];
+        const char *exc_str = (exc == 1) ? "Illegal Function" :
+                              (exc == 2) ? "Illegal Data Address" :
+                              (exc == 3) ? "Illegal Data Value" :
+                              (exc == 4) ? "Device Failure" : "Unknown";
+        printf("[485 RX] Modbus ERR state=%d ExCode=%d (%s)\r\n",
+               (int)s_ep_state, (int)exc, exc_str);
+        s_ep_state = EP_STATE_IDLE;
+        uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+        return;
     }
 
-    s_ep_state = EP_STATE_IDLE;
-    uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+    /* 구간별 파싱 및 다음 구간 송신 */
+    if (s_ep_state == EP_STATE_WAIT_RSP1) {
+        if (epever_parse_rsp1(data, len, &s_poll_data)) {
+            printf("[485 RX] RSP1 OK elapsed=%d ms\r\n", (int)elapsed);
+            uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+            epever_send_req(EP_READ2_ADDR, EP_READ2_COUNT, EP_STATE_WAIT_RSP2);
+        } else {
+            printf("[485 RX] RSP1 parse fail len=%d\r\n", (int)len);
+            s_ep_state = EP_STATE_IDLE;
+            uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+        }
+
+    } else if (s_ep_state == EP_STATE_WAIT_RSP2) {
+        if (epever_parse_rsp2(data, len, &s_poll_data)) {
+            printf("[485 RX] RSP2 OK elapsed=%d ms\r\n", (int)elapsed);
+            uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+            epever_send_req(EP_READ3_ADDR, EP_READ3_COUNT, EP_STATE_WAIT_RSP3);
+        } else {
+            printf("[485 RX] RSP2 parse fail len=%d\r\n", (int)len);
+            s_ep_state = EP_STATE_IDLE;
+            uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+        }
+
+    } else if (s_ep_state == EP_STATE_WAIT_RSP3) {
+        if (epever_parse_rsp3(data, len, &s_poll_data)) {
+            /* 3구간 완료 → ZCL 속성 업데이트 */
+            epever_attrs_update(&s_poll_data);
+            printf("[485 RX] OK  Sol=%d.%02dV/%d.%02dA/%dW"
+                   "  Bat=%d.%02dV/%d.%02dA/%dW  SOC=%d%%"
+                   "  Ld=%d.%02dV/%d.%02dA/%dW  BatT=%d.%02dC\r\n",
+                   (int)s_poll_data.solar_volt,
+                   (int)((s_poll_data.solar_volt-(int)s_poll_data.solar_volt)*100),
+                   (int)s_poll_data.solar_curr,
+                   (int)((s_poll_data.solar_curr-(int)s_poll_data.solar_curr)*100),
+                   (int)s_poll_data.solar_pow,
+                   (int)s_poll_data.bat_volt,
+                   (int)((s_poll_data.bat_volt-(int)s_poll_data.bat_volt)*100),
+                   (int)s_poll_data.bat_curr,
+                   (int)((s_poll_data.bat_curr-(int)s_poll_data.bat_curr)*100),
+                   (int)s_poll_data.chg_pow,
+                   (int)s_poll_data.bat_soc,
+                   (int)s_poll_data.load_volt,
+                   (int)((s_poll_data.load_volt-(int)s_poll_data.load_volt)*100),
+                   (int)s_poll_data.load_curr,
+                   (int)((s_poll_data.load_curr-(int)s_poll_data.load_curr)*100),
+                   (int)s_poll_data.load_pow,
+                   (int)s_poll_data.bat_temp,
+                   (int)((s_poll_data.bat_temp-(int)s_poll_data.bat_temp)*100));
+        } else {
+            printf("[485 RX] RSP3 parse fail len=%d\r\n", (int)len);
+        }
+        s_ep_state = EP_STATE_IDLE;
+        uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
+    }
 }
 
 /**********************************************************************
@@ -606,12 +682,14 @@ static void epever_modbus_timeout_poll(void)
             printf("[485] Rated timeout (%d ms) -> retry\r\n", (int)elapsed);
             s_ep_state = EP_STATE_RATED_REQ;
             uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
-            /* 1초 후 재시도 */
             TL_ZB_TIMER_SCHEDULE(epever_rated_start_cb, NULL, 1000);
         }
-    } else if (s_ep_state == EP_STATE_WAIT_RSP) {
+    } else if (s_ep_state == EP_STATE_WAIT_RSP1 ||
+               s_ep_state == EP_STATE_WAIT_RSP2 ||
+               s_ep_state == EP_STATE_WAIT_RSP3) {
         if (elapsed > EP_RSP_TIMEOUT_MS) {
-            printf("[485] Poll timeout (%d ms)\r\n", (int)elapsed);
+            printf("[485] Poll timeout state=%d (%d ms)\r\n",
+                   (int)s_ep_state, (int)elapsed);
             s_ep_state = EP_STATE_IDLE;
             uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
         }
@@ -756,10 +834,11 @@ void user_init(bool isRetention)
             ZCL_ATTRID_ANALOG_INPUT_PRESENT_VALUE, 30, 600, reportableChangeF);
     }
 
-    /* 부팅 시 Rated Datum 먼저 읽기 — 3초 후 요청 송신
-     * Rated Datum 응답 수신 완료 후 실시간 폴링 타이머 자동 시작 */
-    printf("[BOOT] Rated datum request scheduled (3s)\r\n");
-    TL_ZB_TIMER_SCHEDULE(epever_rated_start_cb, NULL, 3000);
+    /* Rated Datum(0x3000) 은 이 장비에서 미지원 — 스킵하고 바로 폴링 시작 */
+    printf("[BOOT] Skip rated datum -> start poll timer (3s)\r\n");
+    s_rated_done = true;
+    s_ep_state   = EP_STATE_IDLE;
+    TL_ZB_TIMER_SCHEDULE(epever_poll_timer_cb, NULL, 3000);
 }
 
 /**********************************************************************
