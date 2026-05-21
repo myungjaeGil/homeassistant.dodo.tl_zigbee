@@ -111,11 +111,6 @@
 			<locationURI>PARENT-2-PROJECT_LOC/zigbee</locationURI>
 		</link>
 		<link>
-			<name>apps/5chPWM</name>
-			<type>2</type>
-			<locationURI>PARENT-2-PROJECT_LOC/apps/5chPWM</locationURI>
-		</link>
-		<link>
 			<name>apps/common</name>
 			<type>2</type>
 			<locationURI>PARENT-2-PROJECT_LOC/apps/common</locationURI>
@@ -129,6 +124,11 @@
 			<name>apps/juntekBMS</name>
 			<type>2</type>
 			<locationURI>PARENT-2-PROJECT_LOC/apps/juntekBMS</locationURI>
+		</link>
+		<link>
+			<name>apps/pwm5ch</name>
+			<type>2</type>
+			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/pwm5ch</location>
 		</link>
 		<link>
 			<name>platform/boot</name>
