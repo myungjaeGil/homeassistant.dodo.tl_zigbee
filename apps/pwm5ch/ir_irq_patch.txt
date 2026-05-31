@@ -1,0 +1,65 @@
+================================================================
+irq_handler.c 수정 안내 — IR 수신 GPIO 인터럽트 연결
+================================================================
+
+파일 위치:
+  platform/services/b85m/irq_handler.c
+
+수정 내용:
+  gpio_irq_handler() 함수 안에 ir_recv_gpio_irq() 호출 추가
+
+----------------------------------------------------------------
+수정 전:
+----------------------------------------------------------------
+void gpio_irq_handler(void)
+{
+    /* 기존 코드 */
+}
+
+----------------------------------------------------------------
+수정 후:
+----------------------------------------------------------------
+#include "ir_recv.h"   /* 상단 include에 추가 */
+
+void gpio_irq_handler(void)
+{
+    /* PA0 IR 수신 인터럽트 */
+    if (gpio_read_interrupt_flag(IR_RECV_PIN)) {
+        gpio_clr_interrupt_flag(IR_RECV_PIN);
+        ir_recv_gpio_irq();
+
+        /* 다음 엣지 방향 전환 (FALLING↔RISING) */
+        u8 cur_level = gpio_read(IR_RECV_PIN);
+        gpio_set_interrupt_pol(IR_RECV_PIN,
+            cur_level ? POL_FALLING : POL_RISING);
+    }
+}
+
+----------------------------------------------------------------
+주의사항:
+  - gpio_read_interrupt_flag / gpio_clr_interrupt_flag 함수명은
+    SDK 버전에 따라 다를 수 있음
+  - TLSR8258 SDK 기준: reg_irq_src 레지스터로 확인하는 방식도 있음
+
+  대안 (reg 직접 접근 방식):
+  void gpio_irq_handler(void)
+  {
+      if (reg_irq_src & FLD_IRQ_GPIO_EN) {
+          reg_irq_src = FLD_IRQ_GPIO_EN;   /* 클리어 */
+          ir_recv_gpio_irq();
+          /* 엣지 방향 전환 */
+          u8 lv = gpio_read(IR_RECV_PIN);
+          gpio_set_interrupt_pol(IR_RECV_PIN,
+              lv ? POL_FALLING : POL_RISING);
+      }
+  }
+
+================================================================
+커맨드 매핑 (ir_recv_cmd.c 수정)
+================================================================
+  ir_recv_cmd.c 의 switch(cmd) 에서 리모컨 키코드를 맞춰 수정하세요.
+  실제 리모컨 코드 확인 방법:
+    printf("[IR] addr=0x%02X cmd=0x%02X\r\n", addr, cmd);
+    로그로 각 버튼의 코드를 확인 후 매핑
+
+================================================================

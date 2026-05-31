@@ -11,6 +11,7 @@
  *********************************************************************/
 
 #include "tl_common.h"
+#include "oled_ui.h"
 #include "zb_api.h"
 #include "zcl_include.h"
 #include "bdb.h"
@@ -21,6 +22,7 @@
 #include "pwm5ch_ep.h"
 #include "app_ui.h"
 #include "factory_reset.h"
+#include "ir_recv.h"
 #if ZBHCI_EN
 #include "zbhci.h"
 #endif
@@ -201,6 +203,11 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
     printf("[ZB] bdbInitCb: status=%d joined=%d\r\n",
            (int)status, (int)joinedNetwork);
+
+    /* bdb 초기화 완료 후 IR IRQ 재설정 */
+    ir_recv_init();
+    oled_ui_notify_zigbee(joinedNetwork);
+
     if (joinedNetwork) {
         led_power_set_state(LED_PWR_STATE_JOINED);
     } else {
@@ -239,6 +246,8 @@ void app_task(void)
 {
     app_key_handler();
     localPermitJoinState();
+    ir_recv_poll();
+    oled_ui_update();
 }
 
 /*====================================================================
@@ -273,7 +282,7 @@ void user_init(bool isRetention)
     /* HW 초기화 (PWM 5ch + LED + GPIO) */
     pwm_hw_init();
 
-    /* BUTTON1 (PD4) */
+    /* BUTTON1 (PD4, Pin11) */
     drv_gpio_func_set(BUTTON1);
     drv_gpio_input_en(BUTTON1, 1);
     drv_gpio_output_en(BUTTON1, 0);
@@ -284,6 +293,9 @@ void user_init(bool isRetention)
 
     /* 앱 초기화 (EP 등록 + NV 복원 + PWM 적용) */
     user_app_init();
+
+    /* OLED 초기화 */
+    oled_ui_init();
 
 #if ZBHCI_EN
     zbhciInit();
@@ -302,6 +314,10 @@ void user_init(bool isRetention)
 
     bdb_init((af_simple_descriptor_t *)&pwm_ep1_simpleDesc,
              &g_bdbCommissionSetting, &g_zbDemoBdbCb, 1);
+
+    /* IR 수신 초기화 — bdb_init 이후 호출해야 GPIO IRQ 설정이 유지됨
+     * Zigbee 스택 초기화가 reg_gpio_wakeup_irq 를 덮어쓰기 때문 */
+    ir_recv_init();
 
     printf("[BOOT] ZB stack init done. joined=%d\r\n",
            (int)zb_isDeviceJoinedNwk());

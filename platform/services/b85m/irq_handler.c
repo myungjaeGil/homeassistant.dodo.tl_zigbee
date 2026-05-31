@@ -23,6 +23,7 @@
  *
  *******************************************************************************************************/
 #include "tl_common.h"
+#include "ir_recv.h"
 
 #if (__PROJECT_TL_SNIFFER__)
 extern void irq_sniffer_handler(void);
@@ -100,7 +101,10 @@ _attribute_ram_code_ void irq_handler(void)
     if ((src & FLD_IRQ_GPIO_EN)==FLD_IRQ_GPIO_EN) {
         reg_irq_src = FLD_IRQ_GPIO_EN;
         T_DBG_irqTest[5]++;
-        drv_gpio_irq_handler();
+        /* ir_recv_gpio_irq 만 호출 — drv_gpio_irq_handler 제거
+         * NEC 비트 간격(562us) 내에 처리 완료해야 하므로
+         * SDK 콜백 체인 실행 시간을 제거 */
+        ir_recv_gpio_irq();
     }
 
     if ((src & FLD_IRQ_GPIO_RISC0_EN)==FLD_IRQ_GPIO_RISC0_EN) {

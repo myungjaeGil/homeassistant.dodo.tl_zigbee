@@ -308,10 +308,10 @@ void pwm_attrs_init(void)
             g_pwmChAttrs[i].onTime       = 0;
             g_pwmChAttrs[i].offWaitTime  = 0;
             g_pwmChAttrs[i].remainTime   = 0;
-            printf("[PWM] CH%d NV restored: onOff=%d level=%d\r\n",
-                   i, (int)g_pwmChAttrs[i].onOff, (int)g_pwmChAttrs[i].currentLevel);
+//            printf("[PWM] CH%d NV restored: onOff=%d level=%d\r\n",
+//                  i, (int)g_pwmChAttrs[i].onOff, (int)g_pwmChAttrs[i].currentLevel);
         } else {
-            printf("[PWM] CH%d NV not found, default OFF lv=254\r\n", i);
+            //printf("[PWM] CH%d NV not found, default OFF lv=254\r\n", i);
         }
     }
 }
@@ -325,8 +325,8 @@ void pwm_attrs_save(u8 ep_idx)
                      NV_ITEM_PWM_CH_BASE + ep_idx,
                      sizeof(pwm_ch_attr_t),
                      (u8*)&g_pwmChAttrs[ep_idx]);
-    printf("[PWM] CH%d saved: onOff=%d level=%d\r\n",
-           ep_idx,
-           (int)g_pwmChAttrs[ep_idx].onOff,
-           (int)g_pwmChAttrs[ep_idx].currentLevel);
+    //printf("[PWM] CH%d saved: onOff=%d level=%d\r\n",
+//           ep_idx,
+//           (int)g_pwmChAttrs[ep_idx].onOff,
+//           (int)g_pwmChAttrs[ep_idx].currentLevel);
 }

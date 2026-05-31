@@ -1,7 +1,8 @@
 #pragma once
 /*********************************************************************
  * @file    ir_recv.h
- * @brief   NEC IR 수신 — GPIO_PA0 (Pin12)
+ * @brief   NEC IR 수신 — GPIO_PD4 (Pin11)
+ *           FALLING=GPIO_EN, RISING=RISC0 양방향 IRQ
  *
  * NEC 프로토콜:
  *   Leader  : 9ms LOW + 4.5ms HIGH
@@ -18,8 +19,10 @@
 
 #include "tl_common.h"
 
-/* IR 수신 핀 */
-#define IR_RECV_PIN     GPIO_PA0
+/* IR 수신 핀 — board_8258_zt3l.h 에서 정의 (GPIO_PD4, Pin11) */
+#ifndef IR_RECV_PIN
+#define IR_RECV_PIN     GPIO_PD4
+#endif
 
 /* 수신 없음 반환값 */
 #define IR_CMD_NONE     0xFF
@@ -34,6 +37,9 @@ void ir_recv_poll(void);
  * 읽은 후 내부 버퍼 클리어 */
 u8   ir_recv_get_cmd(void);
 u8   ir_recv_get_addr(void);
+
+/* IRQ 핸들러에서 호출 (FALLING + RISING 양방향) */
+void ir_recv_gpio_irq(void);
 
 /* IR 수신 이벤트 콜백 — 사용자 구현 */
 void ir_recv_on_cmd(u8 addr, u8 cmd, bool repeat);

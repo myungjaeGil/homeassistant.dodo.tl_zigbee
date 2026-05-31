@@ -41,13 +41,13 @@ void pwm_hw_apply(u8 ep_idx)
         u16   tick = on ? LEVEL_TO_TICK(lv) : 0;
         u8    ch   = s_pwm_map[ep_idx].pwm_ch;
         pwm_set_cycle_and_duty(ch, (u16)PWM_MAX_TICK, tick);
-        printf("[PWM] CH%d -> onOff=%d lv=%d tick=%d\r\n",
-               ep_idx, (int)on, (int)lv, (int)tick);
+        //printf("[PWM] CH%d -> onOff=%d lv=%d tick=%d\r\n",
+        //       ep_idx, (int)on, (int)lv, (int)tick);
     } else {
         bool mst_on = g_pwmChAttrs[5].onOff;
         u8   mst_lv = g_pwmChAttrs[5].currentLevel;
         u8   i;
-        printf("[PWM] MASTER -> onOff=%d lv=%d\r\n", (int)mst_on, (int)mst_lv);
+        //printf("[PWM] MASTER -> onOff=%d lv=%d\r\n", (int)mst_on, (int)mst_lv);
         for (i = 0; i < 5; i++) {
             u16 tick;
             if (!mst_on || !g_pwmChAttrs[i].onOff) {
@@ -75,8 +75,8 @@ static void pwm_channel_init(void)
         pwm_set_cycle_and_duty(ch, (u16)PWM_MAX_TICK, 0);
         pwm_start(ch);
     }
-    printf("[PWM] HW init: 5ch started (~%dkHz)\r\n",
-           (int)(CLOCK_SYS_CLOCK_HZ / PWM_MAX_TICK / 1000));
+    //printf("[PWM] HW init: 5ch started (~%dkHz)\r\n",
+    //       (int)(CLOCK_SYS_CLOCK_HZ / PWM_MAX_TICK / 1000));
 }
 
 /*====================================================================
