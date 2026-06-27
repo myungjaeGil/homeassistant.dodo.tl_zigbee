@@ -19,8 +19,8 @@
  *   CH0  GPIO_PC2  SDK PWM0  Pin7
  *   CH1  GPIO_PC3  SDK PWM1  Pin6
  *   CH2  GPIO_PD2  SDK PWM3  Pin5
- *   CH3  GPIO_PB4  SDK PWM4  Pin13
- *   CH4  GPIO_PB5  SDK PWM5  Pin14
+ *   CH3  GPIO_PB5  SDK PWM5  Pin14
+ *   CH4  GPIO_PB4  SDK PWM4  Pin13
  *
  * GPIO:
  *   BUTTON1    GPIO_PD4  Pin11  — 입력, 내부 풀업 (5초 장누름 = factory reset)
@@ -64,8 +64,8 @@ enum { VK_SW1 = 0x01, VK_SW2 = 0x02 };
  *   CH0  PC2  PWM0  Pin7
  *   CH1  PC3  PWM1  Pin6
  *   CH2  PD2  PWM3  Pin5
- *   CH3  PB4  PWM4  Pin13
- *   CH4  PB5  PWM5  Pin14
+ *   CH3  PB5  PWM5  Pin14
+ *   CH4  PB4  PWM4  Pin13
  *------------------------------------------------------------------------*/
 #define PWM_CH0_PIN             GPIO_PC2
 #define PWM_CH0_CH              0
@@ -79,13 +79,13 @@ enum { VK_SW1 = 0x01, VK_SW2 = 0x02 };
 #define PWM_CH2_CH              3
 #define PWM_CH2_SET()           do{ gpio_set_func(PWM_CH2_PIN, AS_PWM3); }while(0)
 
-#define PWM_CH3_PIN             GPIO_PB4
-#define PWM_CH3_CH              4
-#define PWM_CH3_SET()           do{ gpio_set_func(PWM_CH3_PIN, AS_PWM4); }while(0)
+#define PWM_CH3_PIN             GPIO_PB5
+#define PWM_CH3_CH              5
+#define PWM_CH3_SET()           do{ gpio_set_func(PWM_CH3_PIN, AS_PWM5); }while(0)
 
-#define PWM_CH4_PIN             GPIO_PB5
-#define PWM_CH4_CH              5
-#define PWM_CH4_SET()           do{ gpio_set_func(PWM_CH4_PIN, AS_PWM5); }while(0)
+#define PWM_CH4_PIN             GPIO_PB4
+#define PWM_CH4_CH              4
+#define PWM_CH4_SET()           do{ gpio_set_func(PWM_CH4_PIN, AS_PWM4); }while(0)
 
 #define PWM_CHANNEL_COUNT       5
 
@@ -110,11 +110,11 @@ enum { VK_SW1 = 0x01, VK_SW2 = 0x02 };
 #define PD2_OUTPUT_ENABLE       1
 #define PD2_INPUT_ENABLE        0
 
-#define PB4_FUNC                AS_PWM4
+#define PB4_FUNC                AS_PWM5
 #define PB4_OUTPUT_ENABLE       1
 #define PB4_INPUT_ENABLE        0
 
-#define PB5_FUNC                AS_PWM5
+#define PB5_FUNC                AS_PWM4
 #define PB5_OUTPUT_ENABLE       1
 #define PB5_INPUT_ENABLE        0
 

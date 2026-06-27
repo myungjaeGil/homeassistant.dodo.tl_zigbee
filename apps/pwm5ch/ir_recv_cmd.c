@@ -33,6 +33,7 @@ extern void pwm_attrs_save(u8 ep_idx);
 static void ir_ch_set_onoff(u8 ep_idx, bool on)
 {
     g_pwmChAttrs[ep_idx].onOff = on;
+    g_pwmChAttrs[ep_idx].startUpOnOff = on ? 0x01 : 0x00;  /* 리셋 후 복원 시 적용되도록 */
     pwm_hw_apply(ep_idx);
     pwm_attrs_save(ep_idx);
 }
@@ -47,9 +48,10 @@ static void ir_ch_adjust(u8 ep_idx, s8 delta_pct)
     s16 cur  = (s16)g_pwmChAttrs[ep_idx].currentLevel;
     s16 step = (s16)(254 * delta_pct / 100);
     cur += step;
-    if (cur < 1)   cur = 1;
+    if (cur < 13)  cur = 13;   /* 최소 5% */
     if (cur > 254) cur = 254;
     g_pwmChAttrs[ep_idx].currentLevel = (u8)cur;
+    g_pwmChAttrs[ep_idx].startUpLevel = (u8)cur;   /* 리셋 후 복원 시 적용되도록 */
     g_pwmChAttrs[ep_idx].onOff = TRUE;
     pwm_hw_apply(ep_idx);
     pwm_attrs_save(ep_idx);
@@ -62,16 +64,17 @@ static void ir_master_adjust(s8 delta_pct)
     s16 cur  = (s16)g_pwmChAttrs[5].currentLevel;
     s16 step = (s16)(254 * delta_pct / 100);
     cur += step;
-    if (cur < 1)   cur = 1;
+    if (cur < 13)  cur = 13;   /* 최소 5% */
     if (cur > 254) cur = 254;
     g_pwmChAttrs[5].currentLevel = (u8)cur;
+    g_pwmChAttrs[5].startUpLevel = (u8)cur;   /* 리셋 후 복원 시 적용되도록 */
     g_pwmChAttrs[5].onOff = TRUE;
     /* ep_idx=5 → pwm_hw_apply 내부에서 CH0~CH4 전체 combined 재계산
      * pwm5ch_ctrl.c: combined = ch_level * master_level / 254 */
     pwm_hw_apply(5);
     pwm_attrs_save(5);
 
-    printf("[IR] MASTER level=%d pct\r\n", (int)(cur * 100 / 254));
+    DBG_LOG("[IR] MASTER level=%d pct\r\n", (int)(cur * 100 / 254));
 }
 
 /*====================================================================
@@ -142,48 +145,48 @@ void ir_recv_on_cmd(u8 addr, u8 cmd, bool repeat)
     /* ── 전채널 ── */
     case 0x45:
         for (u8 i = 0; i <= 5; i++) ir_ch_set_onoff(i, TRUE);
-        printf("[IR] ALL ON\r\n");
+        DBG_LOG("[IR] ALL ON\r\n");
         oled_ui_notify_ir("ALL ON");
         break;
 
     case 0x47:
         for (u8 i = 0; i <= 5; i++) ir_ch_set_onoff(i, FALSE);
-        printf("[IR] ALL OFF\r\n");
+        DBG_LOG("[IR] ALL OFF\r\n");
         oled_ui_notify_ir("ALL OFF");
         break;
 
     /* ── CH1 (ep_idx=0) ── */
-    case 0x44: ir_ch_toggle(0);       printf("[IR] CH1 toggle\r\n"); oled_ui_notify_ir("CH1 toggle"); break;
-    case 0x40: ir_ch_adjust(0, +5);  printf("[IR] CH1 UP\r\n");     oled_ui_notify_ir("CH1 UP");     break;
-    case 0x43: ir_ch_adjust(0, -5);  printf("[IR] CH1 DN\r\n");     oled_ui_notify_ir("CH1 DN");     break;
+    case 0x44: ir_ch_toggle(0);       DBG_LOG("[IR] CH1 toggle\r\n"); oled_ui_notify_ir("CH1 toggle"); break;
+    case 0x40: ir_ch_adjust(0, +5);  DBG_LOG("[IR] CH1 UP\r\n");     oled_ui_notify_ir("CH1 UP");     break;
+    case 0x43: ir_ch_adjust(0, -5);  DBG_LOG("[IR] CH1 DN\r\n");     oled_ui_notify_ir("CH1 DN");     break;
 
     /* ── CH2 (ep_idx=1) ── */
-    case 0x07: ir_ch_toggle(1);       printf("[IR] CH2 toggle\r\n"); oled_ui_notify_ir("CH2 toggle"); break;
-    case 0x15: ir_ch_adjust(1, +5);  printf("[IR] CH2 UP\r\n");     oled_ui_notify_ir("CH2 UP");     break;
-    case 0x09: ir_ch_adjust(1, -5);  printf("[IR] CH2 DN\r\n");     oled_ui_notify_ir("CH2 DN");     break;
+    case 0x07: ir_ch_toggle(1);       DBG_LOG("[IR] CH2 toggle\r\n"); oled_ui_notify_ir("CH2 toggle"); break;
+    case 0x15: ir_ch_adjust(1, +5);  DBG_LOG("[IR] CH2 UP\r\n");     oled_ui_notify_ir("CH2 UP");     break;
+    case 0x09: ir_ch_adjust(1, -5);  DBG_LOG("[IR] CH2 DN\r\n");     oled_ui_notify_ir("CH2 DN");     break;
 
     /* ── CH3 (ep_idx=2) ── */
-    case 0x16: ir_ch_toggle(2);       printf("[IR] CH3 toggle\r\n"); oled_ui_notify_ir("CH3 toggle"); break;
-    case 0x19: ir_ch_adjust(2, +5);  printf("[IR] CH3 UP\r\n");     oled_ui_notify_ir("CH3 UP");     break;
-    case 0x0D: ir_ch_adjust(2, -5);  printf("[IR] CH3 DN\r\n");     oled_ui_notify_ir("CH3 DN");     break;
+    case 0x16: ir_ch_toggle(2);       DBG_LOG("[IR] CH3 toggle\r\n"); oled_ui_notify_ir("CH3 toggle"); break;
+    case 0x19: ir_ch_adjust(2, +5);  DBG_LOG("[IR] CH3 UP\r\n");     oled_ui_notify_ir("CH3 UP");     break;
+    case 0x0D: ir_ch_adjust(2, -5);  DBG_LOG("[IR] CH3 DN\r\n");     oled_ui_notify_ir("CH3 DN");     break;
 
     /* ── CH4 (ep_idx=3) ── */
-    case 0x0C: ir_ch_toggle(3);       printf("[IR] CH4 toggle\r\n"); oled_ui_notify_ir("CH4 toggle"); break;
-    case 0x18: ir_ch_adjust(3, +5);  printf("[IR] CH4 UP\r\n");     oled_ui_notify_ir("CH4 UP");     break;
-    case 0x5E: ir_ch_adjust(3, -5);  printf("[IR] CH4 DN\r\n");     oled_ui_notify_ir("CH4 DN");     break;
+    case 0x0C: ir_ch_toggle(3);       DBG_LOG("[IR] CH4 toggle\r\n"); oled_ui_notify_ir("CH4 toggle"); break;
+    case 0x18: ir_ch_adjust(3, +5);  DBG_LOG("[IR] CH4 UP\r\n");     oled_ui_notify_ir("CH4 UP");     break;
+    case 0x5E: ir_ch_adjust(3, -5);  DBG_LOG("[IR] CH4 DN\r\n");     oled_ui_notify_ir("CH4 DN");     break;
 
     /* ── CH5 (ep_idx=4) ── */
-    case 0x08: ir_ch_toggle(4);       printf("[IR] CH5 toggle\r\n"); oled_ui_notify_ir("CH5 toggle"); break;
-    case 0x1C: ir_ch_adjust(4, +5);  printf("[IR] CH5 UP\r\n");     oled_ui_notify_ir("CH5 UP");     break;
-    case 0x5A: ir_ch_adjust(4, -5);  printf("[IR] CH5 DN\r\n");     oled_ui_notify_ir("CH5 DN");     break;
+    case 0x08: ir_ch_toggle(4);       DBG_LOG("[IR] CH5 toggle\r\n"); oled_ui_notify_ir("CH5 toggle"); break;
+    case 0x1C: ir_ch_adjust(4, +5);  DBG_LOG("[IR] CH5 UP\r\n");     oled_ui_notify_ir("CH5 UP");     break;
+    case 0x5A: ir_ch_adjust(4, -5);  DBG_LOG("[IR] CH5 DN\r\n");     oled_ui_notify_ir("CH5 DN");     break;
 
     /* ── MASTER (ep_idx=5) ── */
-    case 0x42: ir_ch_toggle(5);         printf("[IR] MASTER toggle\r\n"); oled_ui_notify_ir("MASTER toggle"); break;
-    case 0x52: ir_master_adjust(+5);   printf("[IR] MASTER UP\r\n");     oled_ui_notify_ir("MASTER UP");     break;
-    case 0x4A: ir_master_adjust(-5);   printf("[IR] MASTER DN\r\n");     oled_ui_notify_ir("MASTER DN");     break;
+    case 0x42: ir_ch_toggle(5);         DBG_LOG("[IR] MASTER toggle\r\n"); oled_ui_notify_ir("MASTER toggle"); break;
+    case 0x52: ir_master_adjust(+5);   DBG_LOG("[IR] MASTER UP\r\n");     oled_ui_notify_ir("MASTER UP");     break;
+    case 0x4A: ir_master_adjust(-5);   DBG_LOG("[IR] MASTER DN\r\n");     oled_ui_notify_ir("MASTER DN");     break;
 
     default:
-        printf("[IR] unknown cmd=0x%02x\r\n", (int)cmd);
+        DBG_LOG("[IR] unknown cmd=0x%02x\r\n", (int)cmd);
         break;
     }
 }

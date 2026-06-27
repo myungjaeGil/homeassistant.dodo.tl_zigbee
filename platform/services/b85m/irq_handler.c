@@ -1,29 +1,25 @@
 /********************************************************************************************************
  * @file    irq_handler.c
  *
- * @brief   This is the source file of irq_handler for b85m
+ * @brief   IRQ 핸들러 — SDK 공용 파일 (platform/services/b85m/irq_handler.c)
  *
- * @author  Zigbee Group
- * @date    2021
+ * @note    프로젝트별 GPIO IRQ 분기:
+ *            __PROJECT_TL_DIMMABLE_LIGHT__ (pwm5ch):
+ *              - FLD_IRQ_GPIO_EN 에서 ir_recv_gpio_irq() 호출
+ *              - drv_gpio_irq_handler() 제거 (NEC 562us 비트 타이밍 보호)
+ *            그 외 프로젝트 (juntekBMS, doorLock 등):
+ *              - 기존 SDK 동작 유지 (drv_gpio_irq_handler 호출)
  *
- * @par     Copyright (c) 2021, Telink Semiconductor (Shanghai) Co., Ltd. ("TELINK")
- *          All rights reserved.
- *
- *          Licensed under the Apache License, Version 2.0 (the "License");
- *          you may not use this file except in compliance with the License.
- *          You may obtain a copy of the License at
- *
- *              http://www.apache.org/licenses/LICENSE-2.0
- *
- *          Unless required by applicable law or agreed to in writing, software
- *          distributed under the License is distributed on an "AS IS" BASIS,
- *          WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *          See the License for the specific language governing permissions and
- *          limitations under the License.
- *
+ * @author  Zigbee Group / modified for multi-project IR recv support
  *******************************************************************************************************/
 #include "tl_common.h"
+
+/* PWM5CH 프로젝트: NEC IR 수신 헤더 포함 */
+#ifdef __PROJECT_TL_DIMMABLE_LIGHT__
+#if defined(IR_RECV_ENABLE) && IR_RECV_ENABLE
 #include "ir_recv.h"
+#endif
+#endif
 
 #if (__PROJECT_TL_SNIFFER__)
 extern void irq_sniffer_handler(void);
@@ -33,7 +29,6 @@ extern void rf_tx_irq_handler(void);
 
 volatile u8 T_DBG_irqTest[16] = {0};
 
-//called by irq in cstartup.s
 _attribute_ram_code_ void irq_handler(void)
 {
 #if (__PROJECT_TL_BOOT_LOADER__)
@@ -93,27 +88,30 @@ _attribute_ram_code_ void irq_handler(void)
     }
 
     if ((src & FLD_IRQ_SYSTEM_TIMER)) {
-    	reg_irq_src = FLD_IRQ_SYSTEM_TIMER;
-    	T_DBG_irqTest[4]++;
-    	drv_timer_irq3_handler();
+        reg_irq_src = FLD_IRQ_SYSTEM_TIMER;
+        T_DBG_irqTest[4]++;
+        drv_timer_irq3_handler();
     }
 
-    if ((src & FLD_IRQ_GPIO_EN)==FLD_IRQ_GPIO_EN) {
+    if ((src & FLD_IRQ_GPIO_EN) == FLD_IRQ_GPIO_EN) {
         reg_irq_src = FLD_IRQ_GPIO_EN;
         T_DBG_irqTest[5]++;
-        /* ir_recv_gpio_irq 만 호출 — drv_gpio_irq_handler 제거
-         * NEC 비트 간격(562us) 내에 처리 완료해야 하므로
-         * SDK 콜백 체인 실행 시간을 제거 */
+#if defined(__PROJECT_TL_DIMMABLE_LIGHT__) && defined(IR_RECV_ENABLE) && IR_RECV_ENABLE
+        /* PWM5CH + IR_RECV_ENABLE: NEC IR 수신 (GPIO_PA0)
+         * drv_gpio_irq_handler 제거 — NEC 562us 비트 타이밍 보호 */
         ir_recv_gpio_irq();
+#else
+        drv_gpio_irq_handler();
+#endif
     }
 
-    if ((src & FLD_IRQ_GPIO_RISC0_EN)==FLD_IRQ_GPIO_RISC0_EN) {
+    if ((src & FLD_IRQ_GPIO_RISC0_EN) == FLD_IRQ_GPIO_RISC0_EN) {
         reg_irq_src = FLD_IRQ_GPIO_RISC0_EN;
         T_DBG_irqTest[6]++;
         drv_gpio_irq_risc0_handler();
     }
 
-    if ((src & FLD_IRQ_GPIO_RISC1_EN)==FLD_IRQ_GPIO_RISC1_EN) {
+    if ((src & FLD_IRQ_GPIO_RISC1_EN) == FLD_IRQ_GPIO_RISC1_EN) {
         reg_irq_src = FLD_IRQ_GPIO_RISC1_EN;
         T_DBG_irqTest[7]++;
         drv_gpio_irq_risc1_handler();

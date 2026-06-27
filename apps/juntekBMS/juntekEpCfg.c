@@ -8,12 +8,16 @@
  *  EP3 : Binary Input (Relay State: 충전/방전)
  *  EP4 : Simple Metering (Remain Ah)
  *  EP5 : Analog Input (Elapsed Minutes)
+ *  EP6 : OnOff — 주행충전 ON/OFF (신규)
+ *  EP7 : OnOff — 충전전류 Full/Half (신규)
  *********************************************************************/
 
 #include "tl_common.h"
 #include "zcl_include.h"
+#include "ota.h"            /* zcl_ota_register() — OTA 클러스터 핸들러 */
 #include "juntekMonitor.h"
 #include "juntek_ep.h"
+#include "juntekCtrl.h"    /* relay_drvchg_set() / relay_chgcur_set() */
 
 extern u8 zcl_seqNum;
 
@@ -93,6 +97,14 @@ zcl_basicAttr_t g_zcl_basicAttrs = {
     .deviceEnable = TRUE,
 };
 
+/*--------------------------------------------------------------------
+ * Soft Reset 속성 (Manufacturer-Specific 0xFF00)
+ *  HA UI에서 Write 1 → sys_reboot() 호출
+ *  juntek_basicCb() 의 ZCL_CMD_WRITE 핸들러에서 감지
+ *------------------------------------------------------------------*/
+#define ZCL_ATTRID_SOFT_RESET       0xFF00
+static u8 g_soft_reset_attr = 0;   /* 항상 0으로 유지; write=1 → 리셋 트리거 */
+
 static const zclAttrInfo_t basic_attrTbl[] = {
     { ZCL_ATTRID_BASIC_ZCL_VER,           ZCL_DATA_TYPE_UINT8,    ACCESS_CONTROL_READ,                        (u8*)&g_zcl_basicAttrs.zclVersion },
     { ZCL_ATTRID_BASIC_APP_VER,           ZCL_DATA_TYPE_UINT8,    ACCESS_CONTROL_READ,                        (u8*)&g_zcl_basicAttrs.appVersion },
@@ -103,6 +115,7 @@ static const zclAttrInfo_t basic_attrTbl[] = {
     { ZCL_ATTRID_BASIC_POWER_SOURCE,      ZCL_DATA_TYPE_ENUM8,    ACCESS_CONTROL_READ,                        (u8*)&g_zcl_basicAttrs.powerSource },
     { ZCL_ATTRID_BASIC_DEV_ENABLED,       ZCL_DATA_TYPE_BOOLEAN,  ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_zcl_basicAttrs.deviceEnable },
     { ZCL_ATTRID_BASIC_SW_BUILD_ID,       ZCL_DATA_TYPE_CHAR_STR, ACCESS_CONTROL_READ,                        (u8*)g_zcl_basicAttrs.swBuildId },
+    { ZCL_ATTRID_SOFT_RESET,              ZCL_DATA_TYPE_UINT8,    ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_soft_reset_attr },
     { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ,                        (u8*)&zcl_attr_global_clusterRevision },
 };
 #define ZCL_BASIC_ATTR_NUM  (sizeof(basic_attrTbl) / sizeof(zclAttrInfo_t))
@@ -214,8 +227,13 @@ static status_t filter_register(u8 ep, u16 manuCode, u8 attrNum,
 }
 
 static const zclAttrInfo_t elec_attrTbl[] = {
-    { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,         ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredVoltage },
-    { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,         ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredCurrent },
+    /* [수정] ZCL Electrical Measurement 스펙: rmsVoltage/rmsCurrent 는 UINT16
+     * (음수 불가능한 RMS 값). 기존 INT16 정의는 zigbee-herdsman 의
+     * configReport 데이터 타입 검증에서 거부되어(INVALID_DATA_TYPE)
+     * Z2M 의 configure 단계가 실패했음.
+     * activePower 는 방향성이 있어 INT16 유지(스펙과 일치, 정상 동작). */
+    { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,         ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredVoltage },
+    { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,         ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredCurrent },
     { ZCL_ATTRID_ELECTRICAL_MEAS_ACTIVE_POWER,        ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.activePower },
     { ZCL_ATTRID_ELECTRICAL_MEAS_AC_VOLT_MULTIPLIER,  ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ,                             (u8*)&g_juntek_elecAttrs.acVoltageMultiplier },
     { ZCL_ATTRID_ELECTRICAL_MEAS_AC_VOLT_DIVISOR,     ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ,                             (u8*)&g_juntek_elecAttrs.acVoltageDivisor },
@@ -306,6 +324,93 @@ static const zclAttrInfo_t analog_attrTbl[] = {
 #define ZCL_ANALOG_ATTR_NUM  (sizeof(analog_attrTbl) / sizeof(zclAttrInfo_t))
 
 /*====================================================================
+ * EP6: OnOff 속성 (주행충전 ON/OFF) — 신규 채널
+ *
+ * [주의] zcl_onOff_register() 는 SDK(zcl_onOff.h/.c) 제공 함수로 가정함.
+ *        juntekCtrl.c 의 sampleLight_onOffInit/Update 스텁이 이미
+ *        SDK 쪽에서 OnOff 클러스터 모듈을 참조하고 있다는 증거이므로
+ *        존재할 가능성이 높지만, 실제 시그니처/매크로명은
+ *        SDK의 zcl_onOff.h 를 한 번 대조해 주세요.
+ *==================================================================*/
+juntek_onoffAttr_t g_juntek_drvChgAttrs = { .onOff = 0 };
+
+static const zclAttrInfo_t drvChg_attrTbl[] = {
+    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_drvChgAttrs.onOff },
+    { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,  ACCESS_CONTROL_READ,                             (u8*)&zcl_attr_global_clusterRevision },
+};
+#define ZCL_DRVCHG_ATTR_NUM  (sizeof(drvChg_attrTbl) / sizeof(zclAttrInfo_t))
+
+/* OnOff 명령(ON/OFF/Toggle) 처리 콜백
+ * [수정] SDK가 cb 호출 전에 onOff 속성을 자동으로 갱신해줄 것으로
+ * 가정했으나, 실제 로그 확인 결과 그렇지 않음(cmdId=0x01인데도
+ * onOff가 항상 0으로 남아있었음). cmdId로 직접 on/off를 판단해서
+ * 속성과 GPIO를 우리가 직접 갱신한다. */
+status_t juntek_drvChgCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload)
+{
+    (void)pAddrInfo; (void)cmdPayload;
+    bool on;
+
+    switch (cmdId) {
+    case ZCL_CMD_ONOFF_ON:
+        on = TRUE;
+        break;
+    case ZCL_CMD_ONOFF_OFF:
+        on = FALSE;
+        break;
+    case ZCL_CMD_ONOFF_TOGGLE:
+        on = g_juntek_drvChgAttrs.onOff ? FALSE : TRUE;
+        break;
+    default:
+        return ZCL_STA_SUCCESS;
+    }
+
+    g_juntek_drvChgAttrs.onOff = on ? 1 : 0;
+    printf("[EP6 drvChg] cb hit, cmdId=0x%02x -> onOff=%d -> PD2\r\n",
+           cmdId, g_juntek_drvChgAttrs.onOff);
+    relay_drvchg_set(on);
+    return ZCL_STA_SUCCESS;
+}
+
+/*====================================================================
+ * EP7: OnOff 속성 (충전전류 Full/Half) — 신규 채널
+ *  onOff=1 → Half, onOff=0 → Full
+ *==================================================================*/
+juntek_onoffAttr_t g_juntek_chgCurAttrs = { .onOff = 0 };
+
+static const zclAttrInfo_t chgCur_attrTbl[] = {
+    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_chgCurAttrs.onOff },
+    { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,  ACCESS_CONTROL_READ,                             (u8*)&zcl_attr_global_clusterRevision },
+};
+#define ZCL_CHGCUR_ATTR_NUM  (sizeof(chgCur_attrTbl) / sizeof(zclAttrInfo_t))
+
+/* [수정] EP6와 동일한 이유로 cmdId 기반으로 직접 판단 */
+status_t juntek_chgCurCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload)
+{
+    (void)pAddrInfo; (void)cmdPayload;
+    bool on;
+
+    switch (cmdId) {
+    case ZCL_CMD_ONOFF_ON:
+        on = TRUE;
+        break;
+    case ZCL_CMD_ONOFF_OFF:
+        on = FALSE;
+        break;
+    case ZCL_CMD_ONOFF_TOGGLE:
+        on = g_juntek_chgCurAttrs.onOff ? FALSE : TRUE;
+        break;
+    default:
+        return ZCL_STA_SUCCESS;
+    }
+
+    g_juntek_chgCurAttrs.onOff = on ? 1 : 0;
+    printf("[EP7 chgCur] cb hit, cmdId=0x%02x -> onOff=%d -> PC3\r\n",
+           cmdId, g_juntek_chgCurAttrs.onOff);
+    relay_chgcur_set(on);
+    return ZCL_STA_SUCCESS;
+}
+
+/*====================================================================
  * Simple Descriptor
  *==================================================================*/
 
@@ -316,7 +421,7 @@ static const u16 ep1_inClusterList[] = {
     ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   /* 0x0B04 — 표준 Electrical Measurement */
 };
 static const u16 ep1_outClusterList[] = {
-#ifdef ZCL_OTA
+#if ZCL_OTA_SUPPORT
     ZCL_CLUSTER_OTA,
 #endif
 };
@@ -406,12 +511,51 @@ const af_simple_descriptor_t juntek_ep5_simpleDesc = {
     NULL,
 };
 
+/* EP6 입력 클러스터: Basic + Identify + OnOff (주행충전) */
+static const u16 ep6_inClusterList[] = {
+    ZCL_CLUSTER_GEN_BASIC,
+    ZCL_CLUSTER_GEN_IDENTIFY,
+    ZCL_CLUSTER_GEN_ON_OFF,
+};
+
+const af_simple_descriptor_t juntek_ep6_simpleDesc = {
+    HA_PROFILE_ID,
+    HA_DEV_ON_OFF_SWITCH,
+    JUNTEK_ENDPOINT_DRVCHG,
+    1, 0,
+    sizeof(ep6_inClusterList) / sizeof(u16),
+    0,
+    (u16*)ep6_inClusterList,
+    NULL,
+};
+
+/* EP7 입력 클러스터: Basic + Identify + OnOff (충전전류) */
+static const u16 ep7_inClusterList[] = {
+    ZCL_CLUSTER_GEN_BASIC,
+    ZCL_CLUSTER_GEN_IDENTIFY,
+    ZCL_CLUSTER_GEN_ON_OFF,
+};
+
+const af_simple_descriptor_t juntek_ep7_simpleDesc = {
+    HA_PROFILE_ID,
+    HA_DEV_ON_OFF_SWITCH,
+    JUNTEK_ENDPOINT_CHGCUR,
+    1, 0,
+    sizeof(ep7_inClusterList) / sizeof(u16),
+    0,
+    (u16*)ep7_inClusterList,
+    NULL,
+};
+
 /* EP1: Electrical Measurement */
 static const zcl_specClusterInfo_t g_clusterList_ep1[] = {
     { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,      basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
     { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM,   identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
     { ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   MANUFACTURER_CODE_NONE, ZCL_ELEC_ATTR_NUM,       elec_attrTbl,     elec_register,         NULL                     },
     { ZCL_CLUSTER_JUNTEK_FILTER,               MANUFACTURER_CODE_NONE, ZCL_FILTER_ATTR_NUM_DEF, filter_attrTbl,   filter_register,       (void*)filter_cfg_writeCb},
+#if ZCL_OTA_SUPPORT
+    { ZCL_CLUSTER_OTA,                         MANUFACTURER_CODE_NONE, 0,                       NULL,             zcl_ota_register,      NULL                     },
+#endif
 };
 
 /* EP2: Temperature */
@@ -442,6 +586,20 @@ static const zcl_specClusterInfo_t g_clusterList_ep5[] = {
     { ZCL_CLUSTER_GEN_ANALOG_INPUT_BASIC,      MANUFACTURER_CODE_NONE, ZCL_ANALOG_ATTR_NUM,   analog_attrTbl,   analog_register,       NULL                     },
 };
 
+/* EP6: OnOff (주행충전 ON/OFF) */
+static const zcl_specClusterInfo_t g_clusterList_ep6[] = {
+    { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,    basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
+    { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM, identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
+    { ZCL_CLUSTER_GEN_ON_OFF,                  MANUFACTURER_CODE_NONE, ZCL_DRVCHG_ATTR_NUM,   drvChg_attrTbl,   zcl_onOff_register,    (void*)juntek_drvChgCb   },
+};
+
+/* EP7: OnOff (충전전류 Full/Half) */
+static const zcl_specClusterInfo_t g_clusterList_ep7[] = {
+    { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,    basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
+    { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM, identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
+    { ZCL_CLUSTER_GEN_ON_OFF,                  MANUFACTURER_CODE_NONE, ZCL_CHGCUR_ATTR_NUM,   chgCur_attrTbl,   zcl_onOff_register,    (void*)juntek_chgCurCb   },
+};
+
 /* EP별 클러스터 수 — zcl_register()에 EP별로 전달 */
 u8 g_epClusterNum[JUNTEK_EP_COUNT] = {
     sizeof(g_clusterList_ep1) / sizeof(zcl_specClusterInfo_t),  /* EP1 */
@@ -449,6 +607,8 @@ u8 g_epClusterNum[JUNTEK_EP_COUNT] = {
     sizeof(g_clusterList_ep3) / sizeof(zcl_specClusterInfo_t),  /* EP3 */
     sizeof(g_clusterList_ep4) / sizeof(zcl_specClusterInfo_t),  /* EP4 */
     sizeof(g_clusterList_ep5) / sizeof(zcl_specClusterInfo_t),  /* EP5 */
+    sizeof(g_clusterList_ep6) / sizeof(zcl_specClusterInfo_t),  /* EP6 */
+    sizeof(g_clusterList_ep7) / sizeof(zcl_specClusterInfo_t),  /* EP7 */
 };
 
 const zcl_specClusterInfo_t * const g_epClusterList[JUNTEK_EP_COUNT] = {
@@ -457,6 +617,8 @@ const zcl_specClusterInfo_t * const g_epClusterList[JUNTEK_EP_COUNT] = {
     g_clusterList_ep3,
     g_clusterList_ep4,
     g_clusterList_ep5,
+    g_clusterList_ep6,
+    g_clusterList_ep7,
 };
 
 /*====================================================================
@@ -474,6 +636,8 @@ void juntek_attrs_init(void)
 
     for (i = 0; i < 6; i++) g_juntek_meteringAttrs.currentSummation[i] = 0;
     g_juntek_analogAttrs.presentValue = 0.0f;
+    g_juntek_drvChgAttrs.onOff = 0;
+    g_juntek_chgCurAttrs.onOff = 0;
 
     /* 필터 설정 NV 로드 */
     juntek_filter_cfg_load();
@@ -489,14 +653,24 @@ void juntek_attrs_update(const juntek_data_t *d)
     if (!d || !d->valid) return;
 
     /* EP1: Electrical — 단위 변환 (÷divisor로 실수 표현) */
-    g_juntek_elecAttrs.measuredVoltage  = (s16)(d->voltage  * 100.0f);  /* 0.01V 단위 */
-    g_juntek_elecAttrs.measuredCurrent  = (s16)(d->current  * 100.0f);  /* 0.01A 단위 */
+    /* [수정] rmsCurrent 는 ZCL 스펙상 UINT16(절댓값).
+     * 충전/방전 방향은 EP3 relay_state(genBinaryInput) 로 이미 구분되므로
+     * 여기서는 절댓값만 저장 — 이전에는 음수를 INT16에 담아 보냈으나
+     * zigbee-herdsman 의 configReport 데이터 타입 검증에서 거부됨 */
+    {
+        float cur_abs = (d->current < 0.0f) ? -d->current : d->current;
+        g_juntek_elecAttrs.measuredVoltage  = (u16)(d->voltage  * 100.0f);   /* 0.01V 단위 */
+        g_juntek_elecAttrs.measuredCurrent  = (u16)(cur_abs     * 100.0f);  /* 0.01A 단위(절댓값) */
+    }
     g_juntek_elecAttrs.activePower      = (s16)(d->power);               /* 1W 단위 */
 
     /* EP2: Temperature — 0.01°C 단위 */
     g_juntek_tempAttrs.measuredValue    = (s16)(d->temperature * 100.0f);
 
-    /* EP3: Relay State — 1=충전(true), 0=방전(false) */
+    /* EP3: Relay State — 1=충전(true), 0=방전(false)
+     * [수정] PC3는 EP7(충전전류)이 직접 소유하므로 여기서는
+     * 더 이상 물리 릴레이를 구동하지 않고, BMS 파싱 데이터를
+     * 그대로 보고하는 순수 소프트웨어 속성으로만 사용 */
     g_juntek_relayAttrs.presentValue    = (d->relay == 1) ? TRUE : FALSE;
 
     /* EP4: Metering — remain_ah → mAh (UINT48, LSB first) */

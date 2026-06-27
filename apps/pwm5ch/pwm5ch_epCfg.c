@@ -308,10 +308,19 @@ void pwm_attrs_init(void)
             g_pwmChAttrs[i].onTime       = 0;
             g_pwmChAttrs[i].offWaitTime  = 0;
             g_pwmChAttrs[i].remainTime   = 0;
-//            printf("[PWM] CH%d NV restored: onOff=%d level=%d\r\n",
-//                  i, (int)g_pwmChAttrs[i].onOff, (int)g_pwmChAttrs[i].currentLevel);
+            DBG_LOG("[NV] CH%d restored: onOff=%d lv=%d suOnOff=0x%02x suLv=0x%02x\r\n",
+                    (int)i,
+                    (int)g_pwmChAttrs[i].onOff,
+                    (int)g_pwmChAttrs[i].currentLevel,
+                    (int)saved.startUpOnOff,
+                    (int)saved.startUpLevel);
         } else {
-            //printf("[PWM] CH%d NV not found, default OFF lv=254\r\n", i);
+            /* NV 미발견 시 기본값 설정 */
+            g_pwmChAttrs[i].onOff        = FALSE;
+            g_pwmChAttrs[i].currentLevel = (i == 5) ? 254 : 254;  /* MASTER 포함 전채널 254 */
+            g_pwmChAttrs[i].startUpOnOff = 0xFF;
+            g_pwmChAttrs[i].startUpLevel = 0xFF;
+            DBG_LOG("[NV] CH%d not found (st=%d) -> default\r\n", (int)i, (int)st);
         }
     }
 }
@@ -325,8 +334,5 @@ void pwm_attrs_save(u8 ep_idx)
                      NV_ITEM_PWM_CH_BASE + ep_idx,
                      sizeof(pwm_ch_attr_t),
                      (u8*)&g_pwmChAttrs[ep_idx]);
-    //printf("[PWM] CH%d saved: onOff=%d level=%d\r\n",
-//           ep_idx,
-//           (int)g_pwmChAttrs[ep_idx].onOff,
-//           (int)g_pwmChAttrs[ep_idx].currentLevel);
+    /* DBG: CH saved */
 }

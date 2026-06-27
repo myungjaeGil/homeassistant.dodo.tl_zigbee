@@ -24,6 +24,14 @@ void juntek_hw_init(void);
 void led_power_init(void);
 void led_power_set_state(led_pwr_state_t state);
 
+/* PD2 릴레이 출력 제어 — EP6: 주행충전 ON/OFF */
+void relay_drvchg_init(void);
+void relay_drvchg_set(bool on);   /* TRUE=주행충전 ON(HIGH), FALSE=OFF(LOW) */
+
+/* PC3 릴레이 출력 제어 — EP7: 충전전류 Full/Half */
+void relay_chgcur_init(void);
+void relay_chgcur_set(bool on);   /* TRUE=Half(HIGH), FALSE=Full(LOW) */
+
 void light_blink_start(u8 times, u16 ledOnTime, u16 ledOffTime);
 void light_blink_stop(void);
 

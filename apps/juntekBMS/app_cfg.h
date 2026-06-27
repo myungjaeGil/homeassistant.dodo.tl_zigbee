@@ -34,6 +34,10 @@ extern "C" {
  */
 /* Debug mode */
 
+/* UART_PRINTF_MODE — PD7 소프트 UART(비트뱅킹) 디버그 출력
+ * JUNTEK BMS RS485는 하드웨어 UART(PB1 TX/PB7 RX) 사용, PD7과 별개 핀이라 충돌 없음.
+ * (이전에 LED join 버그는 UART_PRINTF_MODE 와 무관하게
+ *  juntek_nwkStatusIndHandler() 의 논리 오류가 원인이었음 — 별도 수정 완료) */
 #define	UART_PRINTF_MODE                        1
 #define DEBUG_BAUDRATE              			1000000//1M
 #define USB_PRINTF_MODE                         0
@@ -44,6 +48,9 @@ extern "C" {
 /* BDB */
 #define TOUCHLINK_SUPPORT                       1
 #define FIND_AND_BIND_SUPPORT                   0
+
+/* IR 수신 기능 — juntekBMS는 미사용 (irq_handler.c 가드용) */
+#define IR_RECV_ENABLE                          0
 
 /* Voltage detect module */
 /* If VOLTAGE_DETECT_ENABLE is set,
@@ -124,7 +131,7 @@ extern "C" {
 /**********************************************************************
  * ZCL cluster configuration
  */
-#define ZCL_ON_OFF_SUPPORT                      0
+#define ZCL_ON_OFF_SUPPORT                      1
 #define ZCL_LEVEL_CTRL_SUPPORT                  0
 #define ZCL_LIGHT_COLOR_CONTROL_SUPPORT         0
 #define ZCL_DOOR_LOCK_SUPPORT                   0
@@ -134,7 +141,7 @@ extern "C" {
 #define ZCL_POLL_CTRL_SUPPORT                   0
 #define ZCL_GROUP_SUPPORT                       0
 #define ZCL_SCENE_SUPPORT                       0
-#define ZCL_OTA_SUPPORT                         0
+#define ZCL_OTA_SUPPORT                         1
 #define ZCL_GP_SUPPORT                          1
 //test
 #define AF_TEST_ENABLE                          0

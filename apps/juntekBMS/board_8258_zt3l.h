@@ -33,9 +33,15 @@
  *   LED_POWER   GPIO_PC0  (Pin10)
  *   LED_PERMIT  GPIO_PA0  (Pin12)
  *
- * Zigbee Endpoint:
- *   EP1~EP5 : PWM CH0~CH4 개별 OnOff+Level
- *   EP6     : 마스터 디밍 (전채널 동시)
+ * Zigbee Endpoint (juntekBMS 프로젝트):
+ *   EP1 : Electrical Measurement (BMS 전압/전류/전력)
+ *   EP2 : Temperature Measurement
+ *   EP3 : Binary Input (충전/방전 상태 — BMS 파싱 데이터 보고용, GPIO 미구동)
+ *   EP4 : Simple Metering (잔량 Ah)
+ *   EP5 : Analog Input (경과 시간)
+ *   EP6 : OnOff — 주행충전 ON/OFF (GPIO_PD2)
+ *   EP7 : OnOff — 충전전류 Full/Half (GPIO_PC3)
+ *   ※ 5ch PWM 핀들은 이 프로젝트에서는 전부 미사용(주석 처리)
  *******************************************************************************************************/
 #pragma once
 
@@ -167,6 +173,32 @@ enum {
 #define PA0_FUNC                AS_GPIO
 #define PA0_OUTPUT_ENABLE       1
 #define PA0_INPUT_ENABLE        0
+
+/*--------------------------------------------------------------------
+ * Relay Output (GPIO)
+ *  RELAY_CHG_CUR : PC3 (Pin6) — EP7: 충전전류 FULL/HALF
+ *                  active HIGH: 1=HALF, 0=FULL
+ *  [수정] 원래 "BMS 충전/방전 상태" 자동 출력 핀이었으나,
+ *         실제 하드웨어 회로가 충전전류 Full/Half 용으로 이미
+ *         구현되어 있어 EP7 OnOff 채널로 용도 변경.
+ *         EP3(Binary Input)는 더 이상 이 핀을 구동하지 않고
+ *         BMS 파싱 데이터만 보고하는 순수 소프트웨어 속성으로 남음.
+ *------------------------------------------------------------------*/
+#define RELAY_CHG_CUR           GPIO_PC3
+
+#define PC3_FUNC                AS_GPIO
+#define PC3_OUTPUT_ENABLE       1
+#define PC3_INPUT_ENABLE        0
+
+/*--------------------------------------------------------------------
+ * 추가 릴레이 출력 (GPIO) — 신규 채널 (EP6)
+ *  RELAY_DRV_CHG : PD2 (Pin5) — EP6: 주행충전 ON/OFF
+ *                  active HIGH: 1=주행충전 ON, 0=OFF
+ *------------------------------------------------------------------*/
+#define RELAY_DRV_CHG           GPIO_PD2
+#define PD2_FUNC                AS_GPIO
+#define PD2_OUTPUT_ENABLE       1
+#define PD2_INPUT_ENABLE        0
 
 /*--------------------------------------------------------------------
  * ADC

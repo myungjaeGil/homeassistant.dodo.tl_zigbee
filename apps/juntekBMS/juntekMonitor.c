@@ -43,8 +43,8 @@
  */
 app_ctx_t gJuntekCtx;
 
-#ifdef ZCL_OTA
-extern ota_callBack_t juntek_otaCb;
+#if ZCL_OTA_SUPPORT
+extern ota_callBack_t juntek_otaCb;   /* zcl_juntekCb.c 에서 정의됨 */
 ota_preamble_t juntek_otaInfo = {
     .fileVer          = FILE_VERSION,
     .imageType        = IMAGE_TYPE,
@@ -213,26 +213,15 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
 
     out->valid = true;
 
-    //printf("----------------------------------------\r\n");
-    //printf("BMS Voltage  >> %d.%02d V\r\n",
-    //       (int)out->voltage, (int)(out->voltage * 100) % 100);
-    //printf("BMS Current  >> %c%d.%02d A\r\n",
-    //       out->current < 0 ? '-' : '+',
-    //       (int)(out->current < 0 ? -out->current : out->current),
-    //       (int)((out->current < 0 ? -out->current : out->current) * 100) % 100);
-    //printf("BMS Power    >> %c%d.%01d W\r\n",
-    //       out->power < 0 ? '-' : '+',
-    //       (int)(out->power < 0 ? -out->power : out->power),
-    //       (int)((out->power < 0 ? -out->power : out->power) * 10) % 10);
-    //printf("BMS RemainAh >> %d.%03d Ah\r\n",
-    //       (int)out->remain_ah,
-    //       (int)(out->remain_ah * 1000) % 1000);
-    //printf("BMS Temp     >> %d.%01d C\r\n",
-    //       (int)out->temperature,
-    //       (int)(out->temperature < 0 ? -out->temperature : out->temperature) % 10);
-    //printf("BMS Elapsed  >> %d min\r\n", (int)out->elapsed_min);
-    //printf("BMS Relay    >> %s\r\n", out->relay ? "CHG" : "DCH");
-    //printf("----------------------------------------\r\n");
+    printf("BMS V=%d.%02d A=%c%d.%02d Ah=%d.%03d T=%d C relay=%s elapsed=%dmin\r\n",
+           (int)out->voltage, (int)(out->voltage * 100) % 100,
+           out->current < 0 ? '-' : '+',
+           (int)(out->current < 0 ? -out->current : out->current),
+           (int)((out->current < 0 ? -out->current : out->current) * 100) % 100,
+           (int)out->remain_ah, (int)(out->remain_ah * 1000) % 1000,
+           (int)out->temperature,
+           out->relay ? "CHG" : "DCH",
+           (int)out->elapsed_min);
 }
 
 /**********************************************************************
@@ -296,35 +285,35 @@ static bool bms_filter_apply(juntek_data_t *d)
 
     /* --- 1단계: 범위 검사 --- */
     if (d->voltage < c->volt_min || d->voltage > c->volt_max) {
-        //printf("BMS filter: V out %d.%02d\r\n",
-        //       (int)d->voltage, (int)(d->voltage * 100) % 100);
+        printf("BMS filter REJECT: V out of range %d.%02d\r\n",
+               (int)d->voltage, (int)(d->voltage * 100) % 100);
         return false;
     }
     if (d->current < c->curr_min || d->current > c->curr_max) {
-        //printf("BMS filter: A out\r\n");
+        printf("BMS filter REJECT: A out of range\r\n");
         return false;
     }
     if (d->temperature < c->temp_min || d->temperature > c->temp_max) {
-        //printf("BMS filter: T out\r\n");
+        printf("BMS filter REJECT: T out of range\r\n");
         return false;
     }
     if (d->remain_ah < 0.0f || d->remain_ah > c->ah_max) {
-        //printf("BMS filter: Ah out\r\n");
+        printf("BMS filter REJECT: Ah out of range\r\n");
         return false;
     }
 
     /* --- 2단계: Rate Limit --- */
     if (f_voltage.initialized) {
         if (bms_fabsf(d->voltage - f_voltage.last) > c->volt_rate) {
-            //printf("BMS filter: V spike\r\n");
+            printf("BMS filter REJECT: V spike\r\n");
             return false;
         }
         if (bms_fabsf(d->current - f_current.last) > c->curr_rate) {
-            //printf("BMS filter: A spike\r\n");
+            printf("BMS filter REJECT: A spike\r\n");
             return false;
         }
         if (bms_fabsf(d->temperature - f_temperature.last) > c->temp_rate) {
-            //printf("BMS filter: T spike\r\n");
+            printf("BMS filter REJECT: T spike\r\n");
             return false;
         }
     }
@@ -449,7 +438,7 @@ void uart_rx_init(void)
 
     myUartDriver.recvCb = uart_rx_cb;
 
-    //printf("uart_rx_init done\r\n");
+    printf("uart_rx_init done\r\n");
 }
 
 /**********************************************************************
@@ -462,7 +451,7 @@ void stack_init(void)
 }
 
 /**********************************************************************
- * user_app_init — EP1~EP3 등록
+ * user_app_init — EP1~EP7 등록
  **********************************************************************/
 void user_app_init(void)
 {
@@ -473,6 +462,8 @@ void user_app_init(void)
         JUNTEK_ENDPOINT_RELAY,
         JUNTEK_ENDPOINT_METERING,
         JUNTEK_ENDPOINT_ANALOG,
+        JUNTEK_ENDPOINT_DRVCHG,
+        JUNTEK_ENDPOINT_CHGCUR,
     };
     const af_simple_descriptor_t *ep_desc[] = {
         &juntek_ep1_simpleDesc,
@@ -480,13 +471,15 @@ void user_app_init(void)
         &juntek_ep3_simpleDesc,
         &juntek_ep4_simpleDesc,
         &juntek_ep5_simpleDesc,
+        &juntek_ep6_simpleDesc,
+        &juntek_ep7_simpleDesc,
     };
 
     af_nodeDescManuCodeUpdate(MANUFACTURER_CODE_TELINK);
 
     zcl_init(juntek_zclProcessIncomingMsg);
 
-    /* EP1~EP5 등록 */
+    /* EP1~EP7 등록 */
     for (i = 0; i < JUNTEK_EP_COUNT; i++) {
         af_endpointRegister(ep_list[i],
                             (af_simple_descriptor_t *)ep_desc[i],
@@ -540,7 +533,7 @@ void user_init(bool isRetention)
     /* UART RX 초기화 */
     uart_rx_init();
 
-    //printf("user_init start\r\n");
+    printf("user_init start\r\n");
 
     /* LED + 버튼 초기화 */
     juntek_hw_init();
@@ -574,6 +567,11 @@ void user_init(bool isRetention)
 
     bdb_init((af_simple_descriptor_t *)&juntek_ep1_simpleDesc,
              &g_bdbCommissionSetting, &g_zbDemoBdbCb, 1);
+
+#if ZCL_OTA_SUPPORT
+    ota_init(OTA_TYPE_CLIENT, (af_simple_descriptor_t *)&juntek_ep1_simpleDesc,
+             &juntek_otaInfo, &juntek_otaCb);
+#endif
 
     /* EP1~EP5 리포팅 설정 — bdb_init() 이후에 호출해야 NV에 정상 저장됨 */
     {

@@ -176,10 +176,10 @@ void ir_recv_gpio_irq(void)
                     s_cmd    = cmd;
                     s_repeat = FALSE;
                     s_ready  = TRUE;
-                    printf("[IR] NEC OK addr=0x%02x cmd=0x%02x\r\n",
+                    DBG_LOG("[IR] NEC OK addr=0x%02x cmd=0x%02x\r\n",
                            (int)addr, (int)cmd);
                 } else {
-                    printf("[IR] NEC FAIL addr=0x%02x inv=0x%02x cmd=0x%02x inv=0x%02x\r\n",
+                    DBG_LOG("[IR] NEC FAIL addr=0x%02x inv=0x%02x cmd=0x%02x inv=0x%02x\r\n",
                            (int)addr, (int)addr_inv, (int)cmd, (int)cmd_inv);
                 }
                 ir_reset_to_idle();
@@ -214,7 +214,7 @@ void ir_recv_init(void)
     gpio_set_interrupt(IR_RECV_PIN, POL_FALLING);
     gpio_en_interrupt(IR_RECV_PIN, 1);
 
-    printf("[IR] init: PA0 NEC receiver ready\r\n");
+    DBG_LOG("[IR] init: PA0 NEC receiver ready\r\n");
 }
 
 /*====================================================================

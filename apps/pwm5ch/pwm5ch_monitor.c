@@ -136,6 +136,10 @@ static void user_app_init(void)
     /* NV 복원 상태를 PWM 하드웨어에 즉시 반영 */
     for (i = 0; i < PWM_EP_COUNT; i++) {
         pwm_hw_apply(i);
+        DBG_LOG("[PWM] CH%d apply: onOff=%d lv=%d\r\n",
+                (int)i,
+                (int)g_pwmChAttrs[i].onOff,
+                (int)g_pwmChAttrs[i].currentLevel);
     }
 }
 
@@ -147,11 +151,11 @@ void pwm5ch_otaProcessMsgHandler(u8 evt, u8 *arg)
     (void)arg;
     switch (evt) {
     case OTA_EVT_START:
-        printf("[OTA] Start\r\n");
+        DBG_LOG("[OTA] Start\r\n");
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         break;
     case OTA_EVT_COMPLETE:
-        printf("[OTA] Complete\r\n");
+        DBG_LOG("[OTA] Complete\r\n");
         break;
     default:
         break;
@@ -167,7 +171,7 @@ static s32 steer_retry_cb(void *arg)
 {
     (void)arg;
     if (zb_isDeviceJoinedNwk()) return -1;
-    printf("[ZB] steer_retry\r\n");
+    DBG_LOG("[ZB] steer_retry\r\n");
     bdb_networkSteerStart();
     return 10000;
 }
@@ -175,7 +179,7 @@ static s32 steer_retry_cb(void *arg)
 void pwm_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     (void)pLeaveInd;
-    printf("[ZB] LeaveInd\r\n");
+    DBG_LOG("[ZB] LeaveInd\r\n");
     led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 3000);
 }
@@ -191,7 +195,7 @@ bool pwm_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)
 void pwm_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
 {
     if (pNwkStatusInd) {
-        printf("[ZB] NwkStatus: %d\r\n", (int)pNwkStatusInd->status);
+        DBG_LOG("[ZB] NwkStatus: %d\r\n", (int)pNwkStatusInd->status);
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     }
 }
@@ -201,7 +205,7 @@ void pwm_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
  *==================================================================*/
 static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
-    printf("[ZB] bdbInitCb: status=%d joined=%d\r\n",
+    DBG_LOG("[ZB] bdbInitCb: status=%d joined=%d\r\n",
            (int)status, (int)joinedNetwork);
 
     /* bdb 초기화 완료 후 IR IRQ 재설정 */
@@ -219,14 +223,14 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
 {
     (void)arg;
-    printf("[ZB] CommissioningCb: status=%d\r\n", (int)status);
+    DBG_LOG("[ZB] CommissioningCb: status=%d\r\n", (int)status);
     if (status == BDB_COMMISSION_STA_SUCCESS) {
-        printf("[ZB] Joined! ShortAddr=%d\r\n", (int)zb_getLocalShortAddr());
+        DBG_LOG("[ZB] Joined! ShortAddr=%d\r\n", (int)zb_getLocalShortAddr());
         led_power_set_state(LED_PWR_STATE_JOINED);
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
-        printf("[ZB] Steering...\r\n");
+        DBG_LOG("[ZB] Steering...\r\n");
     } else {
-        printf("[ZB] Steering failed -> retry 10s\r\n");
+        DBG_LOG("[ZB] Steering failed -> retry 10s\r\n");
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 10000);
     }
@@ -267,17 +271,17 @@ void user_init(bool isRetention)
 
     sys_exceptHandlerRegister(pwmSysException);
 
-    printf("\r\n");
-    printf("========================================\r\n");
-    printf(" ZT3L PWM 5CH Controller\r\n");
-    printf(" App v%d.%d  Stack v%d.%d\r\n",
+    DBG_LOG("\r\n");
+    DBG_LOG("========================================\r\n");
+    DBG_LOG(" ZT3L PWM 5CH Controller\r\n");
+    DBG_LOG(" App v%d.%d  Stack v%d.%d\r\n",
            (int)((APP_RELEASE >> 4) & 0xF), (int)(APP_RELEASE & 0xF),
            (int)((STACK_RELEASE >> 4) & 0xF), (int)(STACK_RELEASE & 0xF));
-    printf(" Clock: %dMHz  PWM: %dkHz\r\n",
+    DBG_LOG(" Clock: %dMHz  PWM: %dkHz\r\n",
            (int)(CLOCK_SYS_CLOCK_HZ / 1000000),
            (int)(CLOCK_SYS_CLOCK_HZ / PWM_MAX_TICK / 1000));
-    printf(" EP1~EP5: 개별 채널  EP6: 마스터 디밍\r\n");
-    printf("========================================\r\n");
+    DBG_LOG(" EP1~EP5: 개별 채널  EP6: 마스터 디밍\r\n");
+    DBG_LOG("========================================\r\n");
 
     /* HW 초기화 (PWM 5ch + LED + GPIO) */
     pwm_hw_init();
@@ -319,6 +323,6 @@ void user_init(bool isRetention)
      * Zigbee 스택 초기화가 reg_gpio_wakeup_irq 를 덮어쓰기 때문 */
     ir_recv_init();
 
-    printf("[BOOT] ZB stack init done. joined=%d\r\n",
+    DBG_LOG("[BOOT] ZB stack init done. joined=%d\r\n",
            (int)zb_isDeviceJoinedNwk());
 }

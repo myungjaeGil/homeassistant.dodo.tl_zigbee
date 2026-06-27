@@ -126,6 +126,11 @@
 			<locationURI>PARENT-2-PROJECT_LOC/apps/juntekBMS</locationURI>
 		</link>
 		<link>
+			<name>apps/porterDoorLock</name>
+			<type>2</type>
+			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/porterDoorLock</location>
+		</link>
+		<link>
 			<name>apps/pwm5ch</name>
 			<type>2</type>
 			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/pwm5ch</location>

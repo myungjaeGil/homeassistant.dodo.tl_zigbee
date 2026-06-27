@@ -64,11 +64,6 @@ static s32 report_all_cb(void *arg)
 }
 
 /*--------------------------------------------------------------------
- * OTA 콜백 — 더미 (OTA 미사용)
- *------------------------------------------------------------------*/
-ota_callBack_t sampleLight_otaCb;
-
-/*--------------------------------------------------------------------
  * Network Steering 재시도 타이머
  *------------------------------------------------------------------*/
 static s32 steer_retry_cb(void *arg)
@@ -87,16 +82,15 @@ static s32 steer_retry_cb(void *arg)
  *------------------------------------------------------------------*/
 static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
-    //printf("BDB init: status=%d joined=%d factoryNew=%d\r\n",
-    //       status, joinedNetwork, zb_isDeviceFactoryNew());
-    //printf("BDB channel: primary=0x%08x\r\n", g_bdbAttrs.primaryChannelSet);
+    printf("BDB init: status=%d joined=%d factoryNew=%d\r\n",
+           status, joinedNetwork, zb_isDeviceFactoryNew());
 
     if (joinedNetwork) {
         led_power_set_state(LED_PWR_STATE_JOINED);
         TL_ZB_TIMER_SCHEDULE(report_all_cb, NULL, 3000);
     } else {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-        //printf("BDB: start steering\r\n");
+        printf("BDB: start steering\r\n");
         bdb_networkSteerStart();
     }
 }
@@ -106,17 +100,17 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
  *------------------------------------------------------------------*/
 static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
 {
-    //printf("BDB commission: status=%d joined=%d\r\n", status, zb_isDeviceJoinedNwk());
+    printf("BDB commission: status=%d joined=%d\r\n", status, zb_isDeviceJoinedNwk());
 
     if (status == BDB_COMMISSION_STA_SUCCESS) {
         led_power_set_state(LED_PWR_STATE_JOINED);
-        //printf("BDB: Joined\r\n");
+        printf("BDB: Joined\r\n");
         TL_ZB_TIMER_SCHEDULE(report_all_cb, NULL, 2000);
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
         /* 진행 중 */
     } else {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-        //printf("BDB: fail=%d, retry 10s\r\n", status);
+        printf("BDB: fail=%d, retry 10s\r\n", status);
         TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 10000);
     }
 }
@@ -137,13 +131,13 @@ bdb_appCb_t g_zbDemoBdbCb = {
 void juntek_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-    //printf("NWK: leave\r\n");
+    printf("NWK: leave\r\n");
     TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 3000);
 }
 
 void juntek_leaveCnfHandler(nlme_leave_cnf_t *pLeaveCnf)
 {
-    //printf("NWK: leave cnf\r\n");
+    printf("NWK: leave cnf\r\n");
 }
 
 bool juntek_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)
@@ -153,7 +147,15 @@ bool juntek_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)
 
 void juntek_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
 {
-    if (pNwkStatusInd) {
+    /* [수정] 기존 코드는 pNwkStatusInd 가 non-NULL 이면(거의 항상 참)
+     * 무조건 LED_PWR_STATE_NOT_JOINED 로 되돌렸음.
+     * NWK Status 알림은 정상 운영 중에도(라우팅 정보 등) 자주 발생하므로
+     * join 직후 LED가 다시 깜빡이는 버그의 원인이었음.
+     *
+     * 실제로 네트워크에서 이탈한 상태인지(zb_isDeviceJoinedNwk() == FALSE)
+     * 확인 후에만 LED를 NOT_JOINED 로 전환한다. */
+    printf("NWK status ind: joined=%d\r\n", zb_isDeviceJoinedNwk());
+    if (pNwkStatusInd && !zb_isDeviceJoinedNwk()) {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     }
 }

@@ -6,6 +6,9 @@
  *  버튼 동작:
  *   - 짧게 누름 (200ms~5s) : 없음 (향후 확장)
  *   - 길게 누름 (>= 5초)   : Factory Reset
+ *
+ *  소프트 리셋은 HA UI → Z2M external converter를 통해
+ *  ZCL Basic 클러스터 0xFF00 속성 Write 로 처리됨
  *********************************************************************/
 #include "tl_common.h"
 #include "zb_api.h"
@@ -54,6 +57,7 @@ void app_key_handler(void)
                             / CLOCK_16M_SYS_TIMER_CLK_1MS);
 
         if (!s_btn_long_handled && held_ms >= BUTTON_LONG_PRESS_MS) {
+            /* 5초 이상: Factory Reset */
             s_btn_long_handled = TRUE;
             printf("Button1 long press: factory reset\r\n");
             led_power_set_state(LED_PWR_STATE_RESET);
@@ -61,9 +65,10 @@ void app_key_handler(void)
         }
 
     } else if (!pressed && s_btn_pressed) {
-        /* 짧게 뗌 — 향후 기능 추가 가능 */
+        /* 버튼 뗌 */
         s_btn_pressed      = FALSE;
         s_btn_long_handled = FALSE;
+        /* 짧게 누름 — 향후 확장 가능 */
     }
 }
 

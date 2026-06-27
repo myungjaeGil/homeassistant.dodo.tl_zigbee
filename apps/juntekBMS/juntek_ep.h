@@ -26,8 +26,10 @@
 #define JUNTEK_ENDPOINT_RELAY      3   /* EP3: Binary Input (relay state) */
 #define JUNTEK_ENDPOINT_METERING   4   /* EP4: Metering (remain_ah) */
 #define JUNTEK_ENDPOINT_ANALOG     5   /* EP5: Analog Input (elapsed_min) */
+#define JUNTEK_ENDPOINT_DRVCHG     6   /* EP6: OnOff — 주행충전 ON/OFF */
+#define JUNTEK_ENDPOINT_CHGCUR     7   /* EP7: OnOff — 충전전류 Full/Half */
 
-#define JUNTEK_EP_COUNT            5   /* 총 엔드포인트 수 */
+#define JUNTEK_EP_COUNT            7   /* 총 엔드포인트 수 */
 
 /*--------------------------------------------------------------------
  * Global Attribute ID
@@ -127,6 +129,35 @@
 #ifndef ZCL_ATTRID_ANALOG_INPUT_STATUS_FLAGS
 #define ZCL_ATTRID_ANALOG_INPUT_STATUS_FLAGS               0x006F
 #endif
+
+/*--------------------------------------------------------------------
+ * On/Off Cluster (0x0006) — EP6(주행충전)/EP7(충전전류) 신규 채널
+ *  ※ SDK(zcl_onOff.h)에 이미 정의돼 있으면 그 값을 우선 사용.
+ *    SDK에 zcl_onOff_register() 가 없다면 직접 구현이 필요하므로
+ *    pwm5ch 등 OnOff 클러스터를 이미 쓰는 프로젝트의
+ *    zcl_onOff.h 헤더를 한 번 확인해 주세요.
+ *------------------------------------------------------------------*/
+#ifndef ZCL_ATTRID_ONOFF
+#define ZCL_ATTRID_ONOFF            0x0000
+#endif
+#ifndef ZCL_CMD_ONOFF_OFF
+#define ZCL_CMD_ONOFF_OFF           0x00
+#endif
+#ifndef ZCL_CMD_ONOFF_ON
+#define ZCL_CMD_ONOFF_ON            0x01
+#endif
+#ifndef ZCL_CMD_ONOFF_TOGGLE
+#define ZCL_CMD_ONOFF_TOGGLE        0x02
+#endif
+
+/* [수정] 빌드 에러: 'HA_DEV_ON_OFF_SWITCH' undeclared (SDK의 HA 프로파일
+ * 헤더에 이 매크로가 없음). Zigbee HA Device ID 스펙상 On/Off Switch는
+ * 0x0000 이므로 SDK 매크로명에 의존하지 않고 직접 정의 */
+#ifndef HA_DEV_ON_OFF_SWITCH
+#define HA_DEV_ON_OFF_SWITCH         0x0000
+#endif
+
+
 /*--------------------------------------------------------------------
  * BMS Filter Config — Manufacturer-Specific 속성 (EP1, 0x0B04)
  * Attribute ID: 0xFF00 ~ 0xFF0B (manufacturer-specific 범위)
@@ -200,9 +231,9 @@ extern zcl_identifyAttr_t g_zcl_identifyAttrs;
 
 /* EP1: Electrical Measurement 속성 */
 typedef struct {
-    s16  measuredVoltage;      /* 0x0505: ÷100 = V */
-    s16  measuredCurrent;      /* 0x0508: ÷100 = A */
-    s16  activePower;          /* 0x050B: W */
+    u16  measuredVoltage;      /* 0x0505: ÷100 = V (UINT16, ZCL 스펙) */
+    u16  measuredCurrent;      /* 0x0508: ÷100 = A (UINT16, 절댓값, ZCL 스펙) */
+    s16  activePower;          /* 0x050B: W (INT16, 방향성 있음, ZCL 스펙) */
     u16  acVoltageMultiplier;  /* 0x0600 */
     u16  acVoltageDivisor;     /* 0x0601 */
     u16  acCurrentMultiplier;  /* 0x0602 */
@@ -240,11 +271,18 @@ typedef struct {
     u8    statusFlags;         /* 0x006F */
 } juntek_analogAttr_t;
 
+/* EP6/EP7: OnOff 속성 (주행충전 / 충전전류 — 신규 채널) */
+typedef struct {
+    u8 onOff;                  /* 0x0000: ZCL_ATTRID_ONOFF */
+} juntek_onoffAttr_t;
+
 extern juntek_elecAttr_t     g_juntek_elecAttrs;
 extern juntek_tempAttr_t     g_juntek_tempAttrs;
 extern juntek_relayAttr_t    g_juntek_relayAttrs;
 extern juntek_meteringAttr_t g_juntek_meteringAttrs;
 extern juntek_analogAttr_t   g_juntek_analogAttrs;
+extern juntek_onoffAttr_t    g_juntek_drvChgAttrs;   /* EP6: 주행충전 */
+extern juntek_onoffAttr_t    g_juntek_chgCurAttrs;   /* EP7: 충전전류 */
 
 /* Simple Descriptor */
 extern const af_simple_descriptor_t juntek_ep1_simpleDesc;  /* Electrical */
@@ -252,6 +290,8 @@ extern const af_simple_descriptor_t juntek_ep2_simpleDesc;  /* Temperature */
 extern const af_simple_descriptor_t juntek_ep3_simpleDesc;  /* Binary Input */
 extern const af_simple_descriptor_t juntek_ep4_simpleDesc;  /* Metering */
 extern const af_simple_descriptor_t juntek_ep5_simpleDesc;  /* Analog Input */
+extern const af_simple_descriptor_t juntek_ep6_simpleDesc;  /* 주행충전 OnOff */
+extern const af_simple_descriptor_t juntek_ep7_simpleDesc;  /* 충전전류 OnOff */
 
 /* EP별 클러스터 리스트 포인터 테이블 */
 extern const zcl_specClusterInfo_t * const g_epClusterList[JUNTEK_EP_COUNT];
@@ -277,8 +317,18 @@ typedef struct {
 status_t juntek_basicCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload);
 status_t juntek_identifyCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload);
 
+/* EP6/EP7: OnOff 명령 수신 후 실제 릴레이 GPIO 동기화 */
+status_t juntek_drvChgCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload);
+status_t juntek_chgCurCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload);
+
 /*--------------------------------------------------------------------
  * JUNTEK 속성 업데이트 — ZCL 속성에 값 반영 후 리포팅
  *------------------------------------------------------------------*/
 void juntek_attrs_update(const juntek_data_t *d);
 void juntek_attrs_init(void);
+
+/*--------------------------------------------------------------------
+ * Soft Reset — Manufacturer-Specific Basic 속성 ID
+ *  EP1 Basic 클러스터에 등록, HA UI Write 1 → sys_reboot()
+ *------------------------------------------------------------------*/
+#define ZCL_ATTRID_SOFT_RESET   0xFF00

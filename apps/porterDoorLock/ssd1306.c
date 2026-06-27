@@ -1,0 +1,192 @@
+/**
+ * @file  ssd1306.c
+ * @brief SSD1306 128x32 OLED driver (I2C, software)
+ */
+#include "tl_common.h"
+#include "ssd1306.h"
+#include "i2c_sw.h"
+
+/* ── 프레임버퍼 ─────────────────────────────────────────── */
+static u8 s_fb[SSD1306_PAGES][SSD1306_WIDTH];  /* [page][col] */
+
+/* ── 5x7 ASCII 폰트 (32 ~ 90) ───────────────────────────── */
+/* 각 문자: 5바이트 (5열 × 8비트 높이, LSB=상단) */
+static const u8 FONT5x7[][5] = {
+    {0x00,0x00,0x00,0x00,0x00}, /* ' ' 0x20 */
+    {0x00,0x00,0x5F,0x00,0x00}, /* '!' */
+    {0x00,0x07,0x00,0x07,0x00}, /* '"' */
+    {0x14,0x7F,0x14,0x7F,0x14}, /* '#' */
+    {0x24,0x2A,0x7F,0x2A,0x12}, /* '$' */
+    {0x23,0x13,0x08,0x64,0x62}, /* '%' */
+    {0x36,0x49,0x55,0x22,0x50}, /* '&' */
+    {0x00,0x05,0x03,0x00,0x00}, /* '\'' */
+    {0x00,0x1C,0x22,0x41,0x00}, /* '(' */
+    {0x00,0x41,0x22,0x1C,0x00}, /* ')' */
+    {0x08,0x2A,0x1C,0x2A,0x08}, /* '*' */
+    {0x08,0x08,0x3E,0x08,0x08}, /* '+' */
+    {0x00,0x50,0x30,0x00,0x00}, /* ',' */
+    {0x08,0x08,0x08,0x08,0x08}, /* '-' */
+    {0x00,0x30,0x30,0x00,0x00}, /* '.' */
+    {0x20,0x10,0x08,0x04,0x02}, /* '/' */
+    {0x3E,0x51,0x49,0x45,0x3E}, /* '0' */
+    {0x00,0x42,0x7F,0x40,0x00}, /* '1' */
+    {0x42,0x61,0x51,0x49,0x46}, /* '2' */
+    {0x21,0x41,0x45,0x4B,0x31}, /* '3' */
+    {0x18,0x14,0x12,0x7F,0x10}, /* '4' */
+    {0x27,0x45,0x45,0x45,0x39}, /* '5' */
+    {0x3C,0x4A,0x49,0x49,0x30}, /* '6' */
+    {0x01,0x71,0x09,0x05,0x03}, /* '7' */
+    {0x36,0x49,0x49,0x49,0x36}, /* '8' */
+    {0x06,0x49,0x49,0x29,0x1E}, /* '9' */
+    {0x00,0x36,0x36,0x00,0x00}, /* ':' */
+    {0x00,0x56,0x36,0x00,0x00}, /* ';' */
+    {0x08,0x14,0x22,0x41,0x00}, /* '<' */
+    {0x14,0x14,0x14,0x14,0x14}, /* '=' */
+    {0x00,0x41,0x22,0x14,0x08}, /* '>' */
+    {0x02,0x01,0x51,0x09,0x06}, /* '?' */
+    {0x32,0x49,0x79,0x41,0x3E}, /* '@' */
+    {0x7E,0x11,0x11,0x11,0x7E}, /* 'A' */
+    {0x7F,0x49,0x49,0x49,0x36}, /* 'B' */
+    {0x3E,0x41,0x41,0x41,0x22}, /* 'C' */
+    {0x7F,0x41,0x41,0x22,0x1C}, /* 'D' */
+    {0x7F,0x49,0x49,0x49,0x41}, /* 'E' */
+    {0x7F,0x09,0x09,0x09,0x01}, /* 'F' */
+    {0x3E,0x41,0x49,0x49,0x7A}, /* 'G' */
+    {0x7F,0x08,0x08,0x08,0x7F}, /* 'H' */
+    {0x00,0x41,0x7F,0x41,0x00}, /* 'I' */
+    {0x20,0x40,0x41,0x3F,0x01}, /* 'J' */
+    {0x7F,0x08,0x14,0x22,0x41}, /* 'K' */
+    {0x7F,0x40,0x40,0x40,0x40}, /* 'L' */
+    {0x7F,0x02,0x04,0x02,0x7F}, /* 'M' */
+    {0x7F,0x04,0x08,0x10,0x7F}, /* 'N' */
+    {0x3E,0x41,0x41,0x41,0x3E}, /* 'O' */
+    {0x7F,0x09,0x09,0x09,0x06}, /* 'P' */
+    {0x3E,0x41,0x51,0x21,0x5E}, /* 'Q' */
+    {0x7F,0x09,0x19,0x29,0x46}, /* 'R' */
+    {0x46,0x49,0x49,0x49,0x31}, /* 'S' */
+    {0x01,0x01,0x7F,0x01,0x01}, /* 'T' */
+    {0x3F,0x40,0x40,0x40,0x3F}, /* 'U' */
+    {0x1F,0x20,0x40,0x20,0x1F}, /* 'V' */
+    {0x3F,0x40,0x38,0x40,0x3F}, /* 'W' */
+    {0x63,0x14,0x08,0x14,0x63}, /* 'X' */
+    {0x07,0x08,0x70,0x08,0x07}, /* 'Y' */
+    {0x61,0x51,0x49,0x45,0x43}, /* 'Z' */
+};
+#define FONT_OFFSET  0x20
+#define FONT_COUNT   (sizeof(FONT5x7) / sizeof(FONT5x7[0]))
+
+/* ── 내부: 명령 전송 ─────────────────────────────────────── */
+static void _cmd(u8 c)
+{
+    u8 buf[2] = {0x00, c};   /* Co=0, D/C#=0 → Command */
+    i2c_sw_write(SSD1306_I2C_ADDR, buf, 2);
+}
+
+static void _cmd2(u8 c1, u8 c2)
+{
+    u8 buf[3] = {0x00, c1, c2};
+    i2c_sw_write(SSD1306_I2C_ADDR, buf, 3);
+}
+
+/* ── 초기화 시퀀스 ───────────────────────────────────────── */
+void ssd1306_init(void)
+{
+    sleep_ms(10);            /* 전원 안정화 */
+
+    _cmd(0xAE);              /* Display OFF */
+    _cmd2(0xD5, 0x80);       /* Clock div */
+    _cmd2(0xA8, 0x1F);       /* MUX ratio = 32-1 = 31 (128x32용) */
+    _cmd2(0xD3, 0x00);       /* Display offset = 0 */
+    _cmd(0x40);              /* Start line = 0 */
+    _cmd2(0x8D, 0x14);       /* Charge pump ON */
+    _cmd2(0x20, 0x00);       /* Horizontal addressing mode */
+    _cmd(0xA1);              /* Segment remap (col127→SEG0) */
+    _cmd(0xC8);              /* COM scan direction reversed */
+    _cmd2(0xDA, 0x02);       /* COM pins config (128x32: sequential, no remap) */
+    _cmd2(0x81, 0xCF);       /* Contrast */
+    _cmd2(0xD9, 0xF1);       /* Pre-charge period */
+    _cmd2(0xDB, 0x40);       /* VCOMH deselect level */
+    _cmd(0xA4);              /* Display RAM (not all-on) */
+    _cmd(0xA6);              /* Normal display (not inverted) */
+
+    ssd1306_clear();
+    ssd1306_flush();
+
+    _cmd(0xAF);              /* Display ON */
+}
+
+/* ── 프레임버퍼 클리어 ───────────────────────────────────── */
+void ssd1306_clear(void)
+{
+    memset(s_fb, 0, sizeof(s_fb));
+}
+
+/* ── GDDRAM으로 flush ────────────────────────────────────── */
+void ssd1306_flush(void)
+{
+    /* 전체 영역 지정 */
+    _cmd2(0x21, 0);  _cmd(127);    /* Column 0~127 */
+    _cmd2(0x22, 0);  _cmd(3);      /* Page 0~3 */
+
+    /* 데이터 전송 — 한 번에 최대 32바이트씩 (I2C 버퍼 안전) */
+    u8 buf[33];
+    buf[0] = 0x40;   /* Co=0, D/C#=1 → Data */
+    for (u8 page = 0; page < SSD1306_PAGES; page++) {
+        for (u8 seg = 0; seg < SSD1306_WIDTH; seg += 32) {
+            u8 chunk = (SSD1306_WIDTH - seg) > 32 ? 32 : (SSD1306_WIDTH - seg);
+            for (u8 i = 0; i < chunk; i++) {
+                buf[i + 1] = s_fb[page][seg + i];
+            }
+            i2c_sw_write(SSD1306_I2C_ADDR, buf, chunk + 1);
+        }
+    }
+}
+
+/* ── 픽셀 ────────────────────────────────────────────────── */
+void ssd1306_pixel(u8 x, u8 y, u8 on)
+{
+    if (x >= SSD1306_WIDTH || y >= SSD1306_HEIGHT) return;
+    if (on) s_fb[y / 8][x] |=  (1 << (y & 7));
+    else    s_fb[y / 8][x] &= ~(1 << (y & 7));
+}
+
+/* ── 문자 출력 ───────────────────────────────────────────── */
+void ssd1306_putchar(u8 page, u8 col, char c)
+{
+    if (page >= SSD1306_PAGES) return;
+    int idx = (u8)c - FONT_OFFSET;
+    if (idx < 0 || idx >= (int)FONT_COUNT) idx = 0;  /* 지원 외 → 공백 */
+
+    for (u8 i = 0; i < 5; i++) {
+        if (col + i >= SSD1306_WIDTH) break;
+        s_fb[page][col + i] = FONT5x7[idx][i];
+    }
+    if (col + 5 < SSD1306_WIDTH) s_fb[page][col + 5] = 0x00;  /* 자간 */
+}
+
+void ssd1306_puts(u8 page, u8 col, const char *s)
+{
+    while (*s && col < SSD1306_WIDTH) {
+        ssd1306_putchar(page, col, *s++);
+        col += 6;   /* 5px 글자 + 1px 자간 */
+    }
+}
+
+/* ── 숫자 출력 (우측정렬, digits자리) ───────────────────── */
+void ssd1306_putnum(u8 page, u8 col, u16 n, u8 digits)
+{
+    char buf[6];
+    /* 간단한 itoa */
+    int i = digits - 1;
+    buf[digits] = '\0';
+    if (n == 0) {
+        buf[i--] = '0';
+    } else {
+        while (i >= 0 && n > 0) {
+            buf[i--] = '0' + (n % 10);
+            n /= 10;
+        }
+    }
+    while (i >= 0) buf[i--] = ' ';  /* 공백 패딩 */
+    ssd1306_puts(page, col, buf);
+}

@@ -31,34 +31,75 @@ static const pwm_hw_map_t s_pwm_map[5] = {
 };
 
 /*====================================================================
- * PWM 하드웨어 출력 적용
+ * PWM 페이드 — 채널별 현재 tick → 목표 tick 점진적 이동
+ *   FADE_STEP_TICK : 한 스텝당 변화량 (클수록 빠르게 페이드)
+ *   FADE_STEP_MS    : 스텝 간 간격(ms)
+ *==================================================================*/
+#define FADE_STEP_TICK      20
+#define FADE_STEP_MS        10
+
+static u16               s_cur_tick[5]  = {0};   /* 채널별 현재 출력 tick */
+static u16               s_target_tick[5] = {0}; /* 채널별 목표 tick */
+static ev_timer_event_t *s_fade_tmr     = NULL;
+
+static s32 pwm_fade_cb(void *arg)
+{
+    (void)arg;
+    bool any_active = FALSE;
+    u8   i;
+
+    for (i = 0; i < 5; i++) {
+        if (s_cur_tick[i] == s_target_tick[i]) continue;
+
+        if (s_cur_tick[i] < s_target_tick[i]) {
+            u16 diff = s_target_tick[i] - s_cur_tick[i];
+            s_cur_tick[i] += (diff < FADE_STEP_TICK) ? diff : FADE_STEP_TICK;
+        } else {
+            u16 diff = s_cur_tick[i] - s_target_tick[i];
+            s_cur_tick[i] -= (diff < FADE_STEP_TICK) ? diff : FADE_STEP_TICK;
+        }
+
+        pwm_set_cycle_and_duty(s_pwm_map[i].pwm_ch, (u16)PWM_MAX_TICK, s_cur_tick[i]);
+        any_active = TRUE;
+    }
+
+    if (!any_active) {
+        s_fade_tmr = NULL;
+        return -1;   /* 타이머 종료 */
+    }
+    return FADE_STEP_MS;
+}
+
+static void pwm_fade_kick(void)
+{
+    if (!s_fade_tmr) {
+        s_fade_tmr = TL_ZB_TIMER_SCHEDULE(pwm_fade_cb, NULL, FADE_STEP_MS);
+    }
+}
+
+/*====================================================================
+ * PWM 하드웨어 출력 적용 — 목표 tick 설정 후 페이드 타이머가 점진 이동
  *==================================================================*/
 void pwm_hw_apply(u8 ep_idx)
 {
     if (ep_idx < 5) {
-        bool  on   = g_pwmChAttrs[ep_idx].onOff;
-        u8    lv   = g_pwmChAttrs[ep_idx].currentLevel;
-        u16   tick = on ? LEVEL_TO_TICK(lv) : 0;
-        u8    ch   = s_pwm_map[ep_idx].pwm_ch;
-        pwm_set_cycle_and_duty(ch, (u16)PWM_MAX_TICK, tick);
-        //printf("[PWM] CH%d -> onOff=%d lv=%d tick=%d\r\n",
-        //       ep_idx, (int)on, (int)lv, (int)tick);
+        bool on  = g_pwmChAttrs[ep_idx].onOff;
+        u8   lv  = g_pwmChAttrs[ep_idx].currentLevel;
+        s_target_tick[ep_idx] = on ? LEVEL_TO_TICK(lv) : 0;
     } else {
         bool mst_on = g_pwmChAttrs[5].onOff;
         u8   mst_lv = g_pwmChAttrs[5].currentLevel;
         u8   i;
-        //printf("[PWM] MASTER -> onOff=%d lv=%d\r\n", (int)mst_on, (int)mst_lv);
         for (i = 0; i < 5; i++) {
-            u16 tick;
             if (!mst_on || !g_pwmChAttrs[i].onOff) {
-                tick = 0;
+                s_target_tick[i] = 0;
             } else {
                 u32 combined = (u32)g_pwmChAttrs[i].currentLevel * mst_lv / 254;
-                tick = LEVEL_TO_TICK((u8)combined);
+                s_target_tick[i] = LEVEL_TO_TICK((u8)combined);
             }
-            pwm_set_cycle_and_duty(s_pwm_map[i].pwm_ch, (u16)PWM_MAX_TICK, tick);
         }
     }
+    pwm_fade_kick();
 }
 
 /*====================================================================

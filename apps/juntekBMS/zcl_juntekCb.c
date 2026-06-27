@@ -17,6 +17,16 @@
 #include "juntek_ep.h"
 #include "juntekCtrl.h"
 
+/* 소프트 리셋 — Telink 8258 레지스터 직접 접근
+ * cpu_reboot() / SOFT_REBOOT() 심볼이 SDK 라이브러리에 따라 다를 수 있으므로
+ * 레지스터를 직접 조작하는 방식으로 구현 */
+#define SOFT_REBOOT()  do { \
+    REG_ADDR8(0x6f) = 0x20; \
+} while(0)
+
+/* soft_reset 타이머 콜백 — forward declaration */
+static s32 soft_reset_timer_cb(void *arg);
+
 #ifdef ZCL_READ
 static void juntek_zclReadRspCmd(zclReadRspCmd_t *pReadRspCmd);
 #endif
@@ -91,37 +101,22 @@ static void juntek_zclReadRspCmd(zclReadRspCmd_t *pReadRspCmd)
  *********************************************************************/
 static void juntek_zclWriteReqCmd(u8 ep, u16 clusterId, zclWriteCmd_t *pWriteReqCmd)
 {
-//    u8 numAttr = pWriteReqCmd->numAttr;
-//    zclWriteRec_t *attr = pWriteReqCmd->attrList;
-//
-//    if (clusterId == ZCL_CLUSTER_GEN_ON_OFF) {
-//        for (u8 i = 0; i < numAttr; i++) {
-//            if (attr[i].attrID == ZCL_ATTRID_START_UP_ONOFF) {
-//                zcl_onOffAttr_save(ep);
-//            }
-//        }
-//    } else if (clusterId == ZCL_CLUSTER_GEN_LEVEL_CONTROL) {
-//        for (u8 i = 0; i < numAttr; i++) {
-//            if (attr[i].attrID == ZCL_ATTRID_LEVEL_START_UP_CURRENT_LEVEL) {
-//                zcl_levelAttr_save(ep);
-//            }
-//        }
-//    } else if (clusterId == ZCL_CLUSTER_LIGHTING_COLOR_CONTROL) {
-//#ifdef ZCL_LIGHT_COLOR_CONTROL
-//        for (u8 i = 0; i < numAttr; i++) {
-//            if (attr[i].attrID == ZCL_ATTRID_START_UP_COLOR_TEMPERATURE_MIREDS) {
-//                zcl_colorCtrlAttr_save();
-//            }
-//        }
-//#endif
-//    } else if (clusterId == ZCL_CLUSTER_GEN_IDENTIFY) {
-//        for (u8 i = 0; i < numAttr; i++) {
-//            if (attr[i].attrID == ZCL_ATTRID_IDENTIFY_TIME) {
-//                juntek_zclIdentifyCmdHandler(ep, 0xFFFE,
-//                                                  g_zcl_identifyAttrs.identifyTime);
-//            }
-//        }
-//    }
+    u8 numAttr = pWriteReqCmd->numAttr;
+    zclWriteRec_t *attr = pWriteReqCmd->attrList;
+
+    if (clusterId == ZCL_CLUSTER_GEN_BASIC) {
+        for (u8 i = 0; i < numAttr; i++) {
+            if (attr[i].attrID == ZCL_ATTRID_SOFT_RESET) {
+                /* 0xFF00 에 1 쓰면 소프트 리셋
+                 * Write 응답 전송 후 200ms 뒤 reboot */
+                if (attr[i].attrData && attr[i].attrData[0] == 0x01) {
+                    printf("ZCL: soft reset requested\r\n");
+                    light_blink_start(3, 100, 100);
+                    TL_ZB_TIMER_SCHEDULE(soft_reset_timer_cb, NULL, 700);
+                }
+            }
+        }
+    }
 }
 
 static void juntek_zclWriteRspCmd(zclWriteRspCmd_t *pWriteRspCmd)
@@ -145,11 +140,49 @@ static void juntek_zclReportCmd(zclReportCmd_t *pReportCmd)
 }
 #endif
 
+/*====================================================================
+ * OTA 콜백 구현
+ *  ZCL_OTA_SUPPORT 1 로 활성화됨.
+ *  OTA 업그레이드 상태를 LED로 표시하고, 완료 시 자동 재부팅.
+ *==================================================================*/
+#if ZCL_OTA_SUPPORT
+ota_callBack_t juntek_otaCb = {
+    .processMsgCbFunc = bms_otaProcessMsgHandler,
+};
+
+void bms_otaProcessMsgHandler(u8 evt, u8 status)
+{
+    if (evt == OTA_EVT_START) {
+        /* OTA 시작: LED 빠른 깜빡임 */
+        light_blink_start(0xFF, 100, 100);   /* 0xFF=무한 반복 */
+    } else if (evt == OTA_EVT_COMPLETE) {
+        if (status == ZCL_STA_SUCCESS) {
+            /* 성공: 재부팅 */
+            light_blink_stop();
+            SOFT_REBOOT();
+        } else {
+            /* 실패: 깜빡임 중단 */
+            light_blink_stop();
+        }
+    }
+}
+#endif
+
 #ifdef ZCL_BASIC
+/*--------------------------------------------------------------------
+ * soft_reset 타이머 콜백 — Write 응답 전송 후 reboot
+ *------------------------------------------------------------------*/
+static s32 soft_reset_timer_cb(void *arg)
+{
+    (void)arg;
+    SOFT_REBOOT();
+    return -1;
+}
+
 status_t juntek_basicCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload)
 {
     if (cmdId == ZCL_CMD_BASIC_RESET_FAC_DEFAULT) {
-        /* Reset all attributes to factory defaults */
+        /* Factory Reset — 기존 동작 없음 */
     }
     return ZCL_STA_UNSUP_CLUSTER_COMMAND;
 }

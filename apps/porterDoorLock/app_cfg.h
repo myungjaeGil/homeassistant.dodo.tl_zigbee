@@ -1,13 +1,8 @@
 /********************************************************************************************************
  * @file    app_cfg.h
- * @brief   ZT3L PWM 5ch 컨트롤러 — 앱 설정
+ * @brief   ZT3L Porter Door Lock — 앱 설정
  *******************************************************************************************************/
 #pragma once
-
-/*--------------------------------------------------------------------
- * IR 수신 활성화 — irq_handler.c 의 멀티 프로젝트 분기에서 사용
- *------------------------------------------------------------------*/
-#define IR_RECV_ENABLE                          1
 
 #if defined(__cplusplus)
 extern "C" {
@@ -17,19 +12,6 @@ extern "C" {
  * Debug
  *------------------------------------------------------------------*/
 #define UART_PRINTF_MODE                        1
-
-/*--------------------------------------------------------------------------
- * 디버그 로그 출력 제어
- *   1: printf 출력 활성화
- *   0: printf 출력 비활성화 (릴리즈 빌드)
- *------------------------------------------------------------------------*/
-#define DEBUG_ENABLE                            1
-
-#if DEBUG_ENABLE
-    #define DBG_LOG(...)    printf(__VA_ARGS__)
-#else
-    #define DBG_LOG(...)    do{}while(0)
-#endif
 #define DEBUG_BAUDRATE                          1000000
 #define USB_PRINTF_MODE                         0
 
@@ -50,6 +32,10 @@ extern "C" {
 #define VOLTAGE_DETECT_ENABLE                   0
 #define FLASH_PROTECT_ENABLE                    0
 #define MODULE_WATCHDOG_ENABLE                  0
+
+/* IR 수신 — Porter Door Lock 은 IR 미사용 (0=비활성)
+ * 1로 변경하면 ir_recv.c 실제 구현이 빌드됨 */
+#define IR_RECV_ENABLE                          0
 
 #if ZBHCI_UART
 #define MODULE_UART_ENABLE                      1
@@ -76,11 +62,13 @@ extern "C" {
 
 /*--------------------------------------------------------------------
  * ZCL 클러스터 활성화
- *  EP1~EP5 : OnOff + Level Control (PWM 개별)
- *  EP6     : OnOff + Level Control (마스터 디밍)
+ *  EP1 : IAS Zone (ACC 상태 감지)
+ *  EP2 : IAS Zone (Door Status 감지)
+ *  EP3 : OnOff    (Lock  릴레이 출력)
+ *  EP4 : OnOff    (Unlock 릴레이 출력)
  *------------------------------------------------------------------*/
 #define ZCL_ON_OFF_SUPPORT                      1
-#define ZCL_LEVEL_CTRL_SUPPORT                  1
+#define ZCL_LEVEL_CTRL_SUPPORT                  0
 #define ZCL_LIGHT_COLOR_CONTROL_SUPPORT         0
 #define ZCL_DOOR_LOCK_SUPPORT                   0
 #define ZCL_TEMPERATURE_MEASUREMENT_SUPPORT     0
@@ -88,7 +76,7 @@ extern "C" {
 #define ZCL_IAS_ZONE_SUPPORT                    0
 #define ZCL_POLL_CTRL_SUPPORT                   0
 #define ZCL_GROUP_SUPPORT                       1
-#define ZCL_SCENE_SUPPORT                       1
+#define ZCL_SCENE_SUPPORT                       0
 #define ZCL_OTA_SUPPORT                         1
 #define ZCL_GP_SUPPORT                          1
 
