@@ -7,9 +7,11 @@
  * EP 구성:
  *   EP1 (0x0B04) haElectricalMeasurement — Voltage / Current / Power
  *   EP2 (0x0402) msTemperatureMeasurement — Temperature
- *   EP3 (0x000F) genBinaryInput           — Relay State (충전/방전)
+ *   EP3 (0x000F) genBinaryInput           — Relay State (충전/방전, BMS 파싱 데이터 보고용)
  *   EP4 (0x0702) seMetering               — Remain Ah
  *   EP5 (0x000C) genAnalogInput           — Elapsed Minutes
+ *   EP6 (0x0006) genOnOff                 — 주행충전 ON/OFF (GPIO_PD2)
+ *   EP7 (0x0006) genOnOff                 — 충전전류 Full/Half (GPIO_PC3, on=Half/off=Full)
  *
  * ZCL 단위 변환:
  *   Voltage  : INT16, ÷100  → V   (acVoltageDivisor=100)
@@ -116,6 +118,28 @@ const fz_analog = {
     },
 };
 
+/** EP6: 주행충전 / EP7: 충전전류 — genOnOff → drvchg_state / chgcur_state
+ *  endpoint ID 로 EP6/EP7을 구분해서 서로 다른 property 이름으로 매핑 */
+const fz_relay_onoff = {
+    cluster: 'genOnOff',
+    type: ['attributeReport', 'readResponse'],
+    convert(model, msg, publish, options, meta) {
+        if (!msg.data.hasOwnProperty('onOff')) return;
+        const ep = msg.endpoint.ID;
+        const v = msg.data.onOff ? 'ON' : 'OFF';
+
+        if (ep === 6) {
+            meta.logger.debug(`[JUNTEK] fz EP6(주행충전) onOff=${v}`);
+            return { drvchg_state: v };
+        }
+        if (ep === 7) {
+            meta.logger.debug(`[JUNTEK] fz EP7(충전전류) onOff=${v}`);
+            return { chgcur_state: v };
+        }
+        return undefined;
+    },
+};
+
 // ─────────────────────────────────────────────
 // 필터 설정 상수
 // ─────────────────────────────────────────────
@@ -175,6 +199,30 @@ const tz_filter = {
 };
 
 // ─────────────────────────────────────────────
+// toZigbee: EP6(주행충전) / EP7(충전전류) ON/OFF 명령
+//  key 이름으로 어느 엔드포인트를 쓸지 구분 (entity가 이미 해당 EP로 바인딩됨)
+// ─────────────────────────────────────────────
+const tz_relay_onoff = {
+    key: ['drvchg_state', 'chgcur_state'],
+    convertSet: async (entity, key, value, meta) => {
+        const v = String(value).toUpperCase();
+        if (v === 'ON') {
+            await entity.command('genOnOff', 'on', {}, { disableDefaultResponse: true });
+        } else if (v === 'OFF') {
+            await entity.command('genOnOff', 'off', {}, { disableDefaultResponse: true });
+        } else if (v === 'TOGGLE') {
+            await entity.command('genOnOff', 'toggle', {}, { disableDefaultResponse: true });
+        } else {
+            return;
+        }
+        return { state: { [key]: v === 'TOGGLE' ? undefined : v } };
+    },
+    convertGet: async (entity, key, meta) => {
+        await entity.read('genOnOff', ['onOff']);
+    },
+};
+
+// ─────────────────────────────────────────────
 // Device definition
 // ─────────────────────────────────────────────
 
@@ -184,8 +232,19 @@ const definition = {
     vendor: 'DODO',
     description: 'JUNTEK BMS Monitor via ZT3L (TLSR8258)',
 
-    fromZigbee: [fz_elec, fz_temp, fz_relay, fz_metering, fz_analog, fz_filter],
-    toZigbee: [tz_filter],
+    fromZigbee: [fz_elec, fz_temp, fz_relay, fz_metering, fz_analog, fz_relay_onoff, fz_filter],
+    toZigbee: [tz_filter, tz_relay_onoff],
+
+    /* EP6/EP7 다중 엔드포인트 구분을 위한 매핑.
+     * fz_relay_onoff/tz_relay_onoff 가 entity(엔드포인트)를 통해
+     * EP6=주행충전, EP7=충전전류 명령을 보낼 때 사용됨 */
+    endpoint: (device) => {
+        return {
+            drvchg_state: 6,
+            chgcur_state: 7,
+        };
+    },
+    meta: { multiEndpoint: true },
 
     exposes: [
         /* EP1: Electrical */
@@ -201,6 +260,30 @@ const definition = {
         { type:'numeric', name:'remain_ah',   label:'Remaining capacity', property:'remain_ah',   access:1, unit:'Ah',  state_class:'measurement' },
         /* EP5 */
         { type:'numeric', name:'elapsed_min', label:'Elapsed minutes',    property:'elapsed_min', access:1, unit:'min', state_class:'measurement' },
+        /* EP6: 주행충전 ON/OFF (access 7 = STATE_SET, 토글 가능한 스위치) */
+        {
+            type: 'binary',
+            name: 'drvchg_state',
+            label: 'Driving charge',
+            property: 'drvchg_state',
+            access: 7,
+            value_on: 'ON',
+            value_off: 'OFF',
+            endpoint: 'drvchg_state',
+            description: '주행충전 ON/OFF (GPIO_PD2)',
+        },
+        /* EP7: 충전전류 Full/Half (ON=Half, OFF=Full) */
+        {
+            type: 'binary',
+            name: 'chgcur_state',
+            label: 'Charge current (half)',
+            property: 'chgcur_state',
+            access: 7,
+            value_on: 'ON',
+            value_off: 'OFF',
+            endpoint: 'chgcur_state',
+            description: '충전전류 Half(ON)/Full(OFF) (GPIO_PC3)',
+        },
         /* 필터 설정 */
         ...Object.values(FILTER_ATTRS).map(a => ({
             type: 'numeric',
@@ -254,6 +337,20 @@ const definition = {
         const ep5 = device.getEndpoint(5);
         await ep5.configureReporting('genAnalogInput', [
             { attribute: 'presentValue', min: 30, max: 600, change: 1 },
+        ]).catch(() => {});
+
+        /* EP6: 주행충전 ON/OFF */
+        const ep6 = device.getEndpoint(6);
+        await ep6.bind('genOnOff', coordinatorEndpoint).catch(() => {});
+        await ep6.configureReporting('genOnOff', [
+            { attribute: 'onOff', min: 1, max: 300, change: 0 },
+        ]).catch(() => {});
+
+        /* EP7: 충전전류 Full/Half */
+        const ep7 = device.getEndpoint(7);
+        await ep7.bind('genOnOff', coordinatorEndpoint).catch(() => {});
+        await ep7.configureReporting('genOnOff', [
+            { attribute: 'onOff', min: 1, max: 300, change: 0 },
         ]).catch(() => {});
     },
 };

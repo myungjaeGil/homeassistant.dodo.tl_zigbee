@@ -13,9 +13,9 @@
  *   Pin2  : C4  (PC4) - ADC         Pin15 : RXD (PB7) - UART_RX
  *   Pin3  : EN                      Pin14 : B5  (PB5) - PWM4  CH4
  *   Pin4  : D7  (PD7) - DEBUG TX    Pin13 : B4  (PB4) - PWM3  CH3
- *   Pin5  : D2  (PD2) - PWM2  CH2   Pin12 : A0  (PA0) - LED_PERMIT
+ *   Pin5  : D2  (PD2) - PWM2  CH2   Pin12 : A0  (PA0) - (미사용)
  *   Pin6  : C3  (PC3) - PWM1  CH1   Pin11 : D4  (PD4) - BUTTON1
- *   Pin7  : C2  (PC2) - PWM0  CH0   Pin10 : C0  (PC0) - LED_POWER
+ *   Pin7  : C2  (PC2) - PWM0  CH0   Pin10 : C0  (PC0) - LED_STATUS
  *   Pin8  : 3V3                     Pin9  : GND
  *   Pin17 : SWS (별도, 우하단)
  *
@@ -30,8 +30,8 @@
  *   BUTTON1  GPIO_PD4  (Pin11)
  *
  * Status LED (GPIO):
- *   LED_POWER   GPIO_PC0  (Pin10)
- *   LED_PERMIT  GPIO_PA0  (Pin12)
+ *   LED_STATUS  GPIO_PC0  (Pin10)  — 실장된 유일한 LED, 표시 규칙은 아래 LED 섹션 참고
+ *   (PA0 / Pin12 에는 LED 없음)
  *
  * Zigbee Endpoint:
  *   EP1~EP5 : PWM CH0~CH4 개별 OnOff+Level
@@ -154,19 +154,42 @@ enum {
 
 /*--------------------------------------------------------------------
  * Status LED (GPIO)
- *  LED_POWER  : PC0 (Pin10) — 전원/상태 표시
- *  LED_PERMIT : PA0 (Pin12) — Permit Join 표시
+ *  실장된 LED 는 PC0 (Pin10) 1개뿐 — 모든 상태 표시를 이 LED 로 통합
+ *  (PA0 / Pin12 에는 LED 없음)
+ *
+ *  LED 표시 규칙 (구현: epeverCtrl.c led_power_refresh())
+ *   No | 상태                      | PC0 LED 표시
+ *  ----+---------------------------+----------------------------------
+ *   1  | 공장초기화 중 (RESET)     | 100ms 점멸 (매우 빠름)
+ *   2  | 미가입 / 가입 시도 중     | 500ms 점멸 (일정한 깜빡임)
+ *   3  | 가입됨 + Z2M 응답 없음    | 두 번 깜빡 + 1.2초 쉼 (더블 블링크)
+ *   4  | 가입됨 + Z2M 연결됨       | 계속 켜짐
+ *   5  | 부팅 직후 (BOOT)          | 꺼짐
+ *  ----+---------------------------+----------------------------------
+ *   - 여러 조건이 겹치면 순위가 높은(숫자가 작은) 표시가 우선
+ *   - Permit Join 열림은 LED 에 표시하지 않음 (로그만 출력)
+ *   - Identify 명령 수신 중에는 identify 점멸이 우선, 끝나면 위 표시로 복귀
+ *   - Z2M 끊김 판단: 30초마다 코디네이터로 heartbeat 리포트 전송,
+ *     Default Response 5초 내 미수신 LINK_MISS_MAX(3)회 연속 → 3번 표시
+ *     (zb_appCb.c), 코디네이터로부터 ZCL 수신 시 즉시 4번으로 복귀
+ *   - 극성은 board_8258_zt3l.h 의 LED_ACTIVE_LEVEL 로 설정
  *------------------------------------------------------------------*/
-#define LED_POWER               GPIO_PC0
-#define LED_PERMIT              GPIO_PA0   /* [수정] PC0 → PA0 */
+#define LED_STATUS              GPIO_PC0
+#define LED_POWER               LED_STATUS  /* 기존 코드 호환용 별칭 */
+
+/* LED 극성 — 실제 회로에 맞게 이 값만 바꾸면 전체 LED 로직이 따라감
+ *   0 : active low  (GPIO=0 일 때 켜짐, LED가 3V3 쪽에 연결)
+ *   1 : active high (GPIO=1 일 때 켜짐, LED가 GND 쪽에 연결) */
+#ifndef LED_ACTIVE_LEVEL
+#define LED_ACTIVE_LEVEL        1   /* PC0 LED 는 active high (실측 확인) */
+#endif
+#define LED_LEVEL_ON            (LED_ACTIVE_LEVEL ? 1 : 0)
+#define LED_LEVEL_OFF           (LED_ACTIVE_LEVEL ? 0 : 1)
+
 
 #define PC0_FUNC                AS_GPIO
 #define PC0_OUTPUT_ENABLE       1
 #define PC0_INPUT_ENABLE        0
-
-#define PA0_FUNC                AS_GPIO
-#define PA0_OUTPUT_ENABLE       1
-#define PA0_INPUT_ENABLE        0
 
 /*--------------------------------------------------------------------
  * ADC

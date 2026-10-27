@@ -23,6 +23,8 @@ void epever_hw_init(void);
 
 void led_power_init(void);
 void led_power_set_state(led_pwr_state_t state);
+void led_power_set_permit(bool open);
+void led_power_set_link(bool ok);
 
 void light_blink_start(u8 times, u16 ledOnTime, u16 ledOffTime);
 void light_blink_stop(void);

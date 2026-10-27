@@ -52,4 +52,7 @@ void epever_leaveIndHandler(nlme_leave_ind_t *pLeaveInd);
 bool epever_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate);
 void epever_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd);
 
+/* Z2M 연결 감시 — 코디네이터로부터 ZCL 수신 시 호출 */
+void epever_link_alive(const char *why);
+
 #endif /* _EPEVER_MONITOR_H_ */

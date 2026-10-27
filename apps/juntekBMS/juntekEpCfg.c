@@ -368,6 +368,29 @@ status_t juntek_drvChgCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPa
     printf("[EP6 drvChg] cb hit, cmdId=0x%02x -> onOff=%d -> PD2\r\n",
            cmdId, g_juntek_drvChgAttrs.onOff);
     relay_drvchg_set(on);
+
+    /* [추가] 상태 변경을 코디네이터에 즉시 보고
+     * juntek_attrs_update()의 EP1~5 리포트와 달리 EP6/EP7은 명령이
+     * 들어올 때만 상태가 바뀌므로, 콜백 안에서 바로 리포트를 보낸다.
+     * 이게 없으면 configureReporting을 걸어도 실제 리포트를 보내는
+     * 코드가 없어 HA/Z2M이 상태 변화를 전혀 알 수 없었다. */
+    {
+        epInfo_t dstEp;
+        TL_SETSTRUCTCONTENT(dstEp, 0);
+        dstEp.dstAddrMode = APS_SHORT_DSTADDR_WITHEP;
+        dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
+        dstEp.dstEp = 1;
+        dstEp.profileId = HA_PROFILE_ID;
+
+        zcl_report(JUNTEK_ENDPOINT_DRVCHG, &dstEp, TRUE,
+                   ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                   MANUFACTURER_CODE_NONE,
+                   ZCL_CLUSTER_GEN_ON_OFF,
+                   ZCL_ATTRID_ONOFF,
+                   ZCL_DATA_TYPE_BOOLEAN,
+                   &g_juntek_drvChgAttrs.onOff);
+    }
+
     return ZCL_STA_SUCCESS;
 }
 
@@ -407,6 +430,25 @@ status_t juntek_chgCurCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPa
     printf("[EP7 chgCur] cb hit, cmdId=0x%02x -> onOff=%d -> PC3\r\n",
            cmdId, g_juntek_chgCurAttrs.onOff);
     relay_chgcur_set(on);
+
+    /* [추가] 상태 변경을 코디네이터에 즉시 보고 — EP6와 동일한 이유 */
+    {
+        epInfo_t dstEp;
+        TL_SETSTRUCTCONTENT(dstEp, 0);
+        dstEp.dstAddrMode = APS_SHORT_DSTADDR_WITHEP;
+        dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
+        dstEp.dstEp = 1;
+        dstEp.profileId = HA_PROFILE_ID;
+
+        zcl_report(JUNTEK_ENDPOINT_CHGCUR, &dstEp, TRUE,
+                   ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                   MANUFACTURER_CODE_NONE,
+                   ZCL_CLUSTER_GEN_ON_OFF,
+                   ZCL_ATTRID_ONOFF,
+                   ZCL_DATA_TYPE_BOOLEAN,
+                   &g_juntek_chgCurAttrs.onOff);
+    }
+
     return ZCL_STA_SUCCESS;
 }
 

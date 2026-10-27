@@ -157,6 +157,71 @@ static void modbus_build_request(u8 *buf, u8 slave_id, u8 func,
 }
 
 /**********************************************************************
+ * [DBG] HEX 덤프 — 16바이트 단위로 끊어서 출력
+ * printf 포맷 지원 범위(%02x 등)에 의존하지 않도록 직접 문자열 조합
+ */
+static void __attribute__((unused)) ep_hexdump(const char *tag, const u8 *buf, u16 len)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char line[16 * 3 + 1];
+    u16 i = 0;
+
+    printf("%s len=%d\r\n", tag, (int)len);
+    while (i < len) {
+        u8 n = 0;
+        u8 pos = 0;
+        while (n < 16 && i < len) {
+            line[pos++] = hex[(buf[i] >> 4) & 0x0F];
+            line[pos++] = hex[buf[i] & 0x0F];
+            line[pos++] = ' ';
+            n++; i++;
+        }
+        line[pos] = '\0';
+        printf("    %s\r\n", line);
+    }
+}
+
+/**********************************************************************
+ * [DBG] 응답 프레임 공통 검증 — 실패 사유를 출력
+ */
+static bool ep_frame_check(const char *tag, const u8 *buf, u16 buf_len, u16 reg_cnt)
+{
+    u16 expected = 3 + reg_cnt * 2 + 2;
+    if (buf_len < expected) {
+        printf("[485 CHK] %s short: len=%d expected=%d\r\n",
+               tag, (int)buf_len, (int)expected);
+        return false;
+    }
+    if (buf[0] != EP_MODBUS_SLAVE_ID) {
+        printf("[485 CHK] %s bad ID: %d (expect %d)\r\n",
+               tag, (int)buf[0], (int)EP_MODBUS_SLAVE_ID);
+        return false;
+    }
+    if (buf[1] != EP_MODBUS_FUNC_READ) {
+        printf("[485 CHK] %s bad FC: %d (expect %d)\r\n",
+               tag, (int)buf[1], (int)EP_MODBUS_FUNC_READ);
+        return false;
+    }
+    if (buf[2] != reg_cnt * 2) {
+        printf("[485 CHK] %s bad byteCnt: %d (expect %d)\r\n",
+               tag, (int)buf[2], (int)(reg_cnt * 2));
+        return false;
+    }
+    u16 crc_calc = modbus_crc16(buf, expected - 2);
+    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
+    if (crc_calc != crc_recv) {
+        printf("[485 CHK] %s CRC mismatch: calc=0x%x recv=0x%x\r\n",
+               tag, (unsigned int)crc_calc, (unsigned int)crc_recv);
+        return false;
+    }
+    if (buf_len > expected) {
+        printf("[485 CHK] %s trailing %d byte(s) ignored\r\n",
+               tag, (int)(buf_len - expected));
+    }
+    return true;
+}
+
+/**********************************************************************
  * 구간별 응답 파서 공통 매크로
  */
 #define REG_BE(d, i)  ((u16)(((d)[(i)*2] << 8) | (d)[(i)*2+1]))
@@ -164,16 +229,12 @@ static void modbus_build_request(u8 *buf, u8 slave_id, u8 func,
 /* 구간1: 0x3100~0x3107 — Solar V/I/P, Battery V/I/P */
 static bool epever_parse_rsp1(const u8 *buf, u16 buf_len, epever_data_t *out)
 {
-    u16 expected = 3 + EP_READ1_COUNT * 2 + 2;
-    if (buf_len < expected) return false;
-    if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
-    if (buf[1] != EP_MODBUS_FUNC_READ) return false;
-    if (buf[2] != EP_READ1_COUNT * 2)  return false;
-    u16 crc_calc = modbus_crc16(buf, expected - 2);
-    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
-    if (crc_calc != crc_recv) return false;
+    if (!ep_frame_check("RSP1", buf, buf_len, EP_READ1_COUNT)) return false;
 
     const u8 *d = buf + 3;
+    // printf("[485 REG] 3100=%d 3101=%d 3102=%d 3103=%d 3104=%d 3105=%d 3106=%d 3107=%d\r\n",
+           // (int)REG_BE(d, 0), (int)REG_BE(d, 1), (int)REG_BE(d, 2), (int)REG_BE(d, 3),
+           // (int)REG_BE(d, 4), (int)REG_BE(d, 5), (int)REG_BE(d, 6), (int)REG_BE(d, 7));
     out->solar_volt = REG_BE(d, 0) / 100.0f;  /* 0x3100 */
     out->solar_curr = REG_BE(d, 1) / 100.0f;  /* 0x3101 */
     u32 sol_pow = ((u32)REG_BE(d, 3) << 16) | REG_BE(d, 2);
@@ -188,16 +249,12 @@ static bool epever_parse_rsp1(const u8 *buf, u16 buf_len, epever_data_t *out)
 /* 구간2: 0x310C~0x3111 — Load V/I/P, Bat/Dev Temp */
 static bool epever_parse_rsp2(const u8 *buf, u16 buf_len, epever_data_t *out)
 {
-    u16 expected = 3 + EP_READ2_COUNT * 2 + 2;
-    if (buf_len < expected) return false;
-    if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
-    if (buf[1] != EP_MODBUS_FUNC_READ) return false;
-    if (buf[2] != EP_READ2_COUNT * 2)  return false;
-    u16 crc_calc = modbus_crc16(buf, expected - 2);
-    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
-    if (crc_calc != crc_recv) return false;
+    if (!ep_frame_check("RSP2", buf, buf_len, EP_READ2_COUNT)) return false;
 
     const u8 *d = buf + 3;
+    // printf("[485 REG] 310C=%d 310D=%d 310E=%d 310F=%d 3110=%d 3111=%d\r\n",
+           // (int)REG_BE(d, 0), (int)REG_BE(d, 1), (int)REG_BE(d, 2),
+           // (int)REG_BE(d, 3), (int)(s16)REG_BE(d, 4), (int)(s16)REG_BE(d, 5));
     out->load_volt = REG_BE(d, 0) / 100.0f;   /* 0x310C */
     out->load_curr = REG_BE(d, 1) / 100.0f;   /* 0x310D */
     u32 load_pow = ((u32)REG_BE(d, 3) << 16) | REG_BE(d, 2);
@@ -210,16 +267,10 @@ static bool epever_parse_rsp2(const u8 *buf, u16 buf_len, epever_data_t *out)
 /* 구간3: 0x311A — Battery SOC % */
 static bool epever_parse_rsp3(const u8 *buf, u16 buf_len, epever_data_t *out)
 {
-    u16 expected = 3 + EP_READ3_COUNT * 2 + 2;
-    if (buf_len < expected) return false;
-    if (buf[0] != EP_MODBUS_SLAVE_ID) return false;
-    if (buf[1] != EP_MODBUS_FUNC_READ) return false;
-    if (buf[2] != EP_READ3_COUNT * 2)  return false;
-    u16 crc_calc = modbus_crc16(buf, expected - 2);
-    u16 crc_recv = ((u16)buf[expected-1] << 8) | buf[expected-2];
-    if (crc_calc != crc_recv) return false;
+    if (!ep_frame_check("RSP3", buf, buf_len, EP_READ3_COUNT)) return false;
 
     const u8 *d = buf + 3;
+    // printf("[485 REG] 311A=%d\r\n", (int)REG_BE(d, 0));
     out->bat_soc = (u8)REG_BE(d, 0);          /* 0x311A */
     out->valid   = true;
     return true;
@@ -361,12 +412,20 @@ static void epever_parse_rated(const u8 *buf, u16 buf_len)
 }
 
 /**********************************************************************
+ * RS485 DMA 송신 버퍼
+ *  - 로컬(스택) 배열은 4바이트 정렬이 보장되지 않고, 함수가 리턴한 뒤
+ *    DMA가 아직 읽는 중인 스택 영역이 덮어써질 수 있음 → 전역 정렬 버퍼 사용
+ *  - [0..3] = length 헤더, [4..11] = Modbus 요청 8바이트
+ */
+static u8 s_ep_tx_buf[12] __attribute__((aligned(4)));
+
+/**********************************************************************
  * epever_rated_request_send — Rated Datum 요청 송신
  */
 static void epever_rated_request_send(void)
 {
     /* uart_dma_send() 는 앞 4바이트가 length 헤더 */
-    u8 buf[12];
+    u8 *buf = s_ep_tx_buf;   /* DMA 전송: 전역 + 4바이트 정렬 버퍼 사용 */
     buf[0] = 8; buf[1] = 0; buf[2] = 0; buf[3] = 0;  /* len=8 */
     modbus_build_request(buf + 4, EP_MODBUS_SLAVE_ID, EP_MODBUS_FUNC_READ,
                           EP_RATED_START_ADDR, EP_RATED_COUNT);
@@ -383,6 +442,7 @@ static void epever_rated_request_send(void)
                (int)req[0], (int)req[1],
                (int)addr, (int)cnt,
                (int)req[6], (int)req[7]);
+        // ep_hexdump("[485 TX HEX]", req, 8);
     }
 }
 
@@ -391,7 +451,7 @@ static void epever_rated_request_send(void)
  */
 static void epever_send_req(u16 addr, u16 cnt, ep_modbus_state_t next_state)
 {
-    u8 buf[12];
+    u8 *buf = s_ep_tx_buf;   /* DMA 전송: 전역 + 4바이트 정렬 버퍼 사용 */
     buf[0] = 8; buf[1] = 0; buf[2] = 0; buf[3] = 0;
     modbus_build_request(buf + 4, EP_MODBUS_SLAVE_ID, EP_MODBUS_FUNC_READ,
                          addr, cnt);
@@ -399,10 +459,11 @@ static void epever_send_req(u16 addr, u16 cnt, ep_modbus_state_t next_state)
     s_ep_state = next_state;
     s_req_time = clock_time();
 
-    u8 *req = buf + 4;
-    printf("[485 TX] Addr=%d Cnt=%d CRC=%d %d\r\n",
-           (int)addr, (int)cnt,
-           (int)req[6], (int)req[7]);
+    // u8 *req = buf + 4;
+    // printf("[485 TX] Addr=%d Cnt=%d CRC=%d %d -> state=%d\r\n",
+           // (int)addr, (int)cnt,
+           // (int)req[6], (int)req[7], (int)next_state);
+    // ep_hexdump("[485 TX HEX]", req, 8);
 }
 
 /**********************************************************************
@@ -421,6 +482,8 @@ static s32 epever_poll_timer_cb(void *arg)
     }
 
     /* 누적 데이터 초기화 후 구간1 송신 */
+    // printf("[485] ---- poll start (interval=%d ms, joined=%d) ----\r\n",
+           // (int)g_poll_interval_ms, (int)zb_isDeviceJoinedNwk());
     memset(&s_poll_data, 0, sizeof(s_poll_data));
     epever_send_req(EP_READ1_ADDR, EP_READ1_COUNT, EP_STATE_WAIT_RSP1);
     return (s32)g_poll_interval_ms;
@@ -443,6 +506,11 @@ void uart_rx_poll(void)
 
     u16  len  = ((u16)uart_rx_buf[1] << 8) | uart_rx_buf[0];
     u8  *data = (u8 *)(uart_rx_buf + 4);
+
+    /* [DBG] 수신 원본 프레임 덤프 (버퍼 범위 내로 제한) */
+    // printf("[485 RX] state=%d\r\n", (int)s_ep_state);
+    // ep_hexdump("[485 RX HEX]", data,
+               // (len <= (UART_BUF_SIZE - 4)) ? len : (UART_BUF_SIZE - 4));
 
     /* Rated Datum 응답 처리 */
     if (s_ep_state == EP_STATE_RATED_WAIT) {
@@ -490,6 +558,8 @@ void uart_rx_poll(void)
     if (s_ep_state != EP_STATE_WAIT_RSP1 &&
         s_ep_state != EP_STATE_WAIT_RSP2 &&
         s_ep_state != EP_STATE_WAIT_RSP3) {
+        printf("[485 RX] unexpected frame in state=%d -> drop\r\n",
+               (int)s_ep_state);
         uart_rx_flag = 0;
         uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
         return;
@@ -532,7 +602,7 @@ void uart_rx_poll(void)
     /* 구간별 파싱 및 다음 구간 송신 */
     if (s_ep_state == EP_STATE_WAIT_RSP1) {
         if (epever_parse_rsp1(data, len, &s_poll_data)) {
-            printf("[485 RX] RSP1 OK elapsed=%d ms\r\n", (int)elapsed);
+            // printf("[485 RX] RSP1 OK elapsed=%d ms\r\n", (int)elapsed);
             uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
             epever_send_req(EP_READ2_ADDR, EP_READ2_COUNT, EP_STATE_WAIT_RSP2);
         } else {
@@ -543,7 +613,7 @@ void uart_rx_poll(void)
 
     } else if (s_ep_state == EP_STATE_WAIT_RSP2) {
         if (epever_parse_rsp2(data, len, &s_poll_data)) {
-            printf("[485 RX] RSP2 OK elapsed=%d ms\r\n", (int)elapsed);
+            // printf("[485 RX] RSP2 OK elapsed=%d ms\r\n", (int)elapsed);
             uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
             epever_send_req(EP_READ3_ADDR, EP_READ3_COUNT, EP_STATE_WAIT_RSP3);
         } else {
@@ -644,15 +714,19 @@ static void user_app_init(void)
         &epever_ep5_simpleDesc,
     };
 
+    printf("[INIT] a manuCode\r\n");
     af_nodeDescManuCodeUpdate(MANUFACTURER_CODE_TELINK);
+    printf("[INIT] b zcl_init\r\n");
     zcl_init(epever_zclProcessIncomingMsg);
 
     for (i = 0; i < EPEVER_EP_COUNT; i++) {
+        printf("[INIT] c af_endpointRegister ep=%d\r\n", (int)ep_list[i]);
         af_endpointRegister(ep_list[i],
                             (af_simple_descriptor_t *)ep_desc[i],
                             zcl_rx_handler, NULL);
     }
 
+    printf("[INIT] d attrs_init (NV read)\r\n");
     epever_attrs_init();
 
     /* NV 복원된 poll_interval 적용 */
@@ -661,11 +735,14 @@ static void user_app_init(void)
     }
 
     for (i = 0; i < EPEVER_EP_COUNT; i++) {
+        printf("[INIT] e zcl_register ep=%d clusters=%d\r\n",
+               (int)ep_list[i], (int)g_epClusterNum[i]);
         zcl_register(ep_list[i], g_epClusterNum[i],
                      (zcl_specClusterInfo_t *)g_epClusterList[i]);
     }
 
 #if ZCL_GP_SUPPORT
+    printf("[INIT] f gp_init\r\n");
     gp_init(EPEVER_ENDPOINT_SOLAR);
 #endif
 }
@@ -736,6 +813,7 @@ void app_task(void)
  */
 static void epeverSysException(void)
 {
+    printf("[EXC] sys exception -> SYSTEM_RESET\r\n");
     SYSTEM_RESET();
 }
 
@@ -758,6 +836,7 @@ void user_init(bool isRetention)
     printf(" App v%d.%d  Stack v%d.%d\r\n",
            (int)((APP_RELEASE >> 4) & 0xF), (int)(APP_RELEASE & 0xF),
            (int)((STACK_RELEASE >> 4) & 0xF), (int)(STACK_RELEASE & 0xF));
+    printf(" Build: %s %s\r\n", __DATE__, __TIME__);   /* 새 바이너리 확인용 */
     printf(" Clock: %dMHz\r\n",
            (int)(CLOCK_SYS_CLOCK_HZ / 1000000));
     printf(" RS485 115200 8N1 ID=%d\r\n",
@@ -767,6 +846,7 @@ void user_init(bool isRetention)
     printf("========================================\r\n");
 
     /* LED + 버튼 초기화 */
+    printf("[BOOT] 1 hw_init\r\n");
     epever_hw_init();
 
     /* Button1 (PD4) GPIO 입력 + 풀업 */
@@ -776,10 +856,13 @@ void user_init(bool isRetention)
     drv_gpio_up_down_resistor(BUTTON1, PM_PIN_PULLUP_10K);
 
     /* Zigbee 스택 초기화 */
+    printf("[BOOT] 2 stack_init\r\n");
     stack_init();
 
     /* 애플리케이션 초기화 */
+    printf("[BOOT] 3 user_app_init\r\n");
     user_app_init();
+    printf("[BOOT] 4 user_app_init done\r\n");
 
 #if ZBHCI_EN
     zbhciInit();
@@ -796,10 +879,12 @@ void user_init(bool isRetention)
             gEpeverCtx.tcLinkKey.key;
     }
 
+    printf("[BOOT] 5 bdb_init\r\n");
     bdb_init((af_simple_descriptor_t *)&epever_ep1_simpleDesc,
              &g_bdbCommissionSetting, &g_zbDemoBdbCb, 1);
 
     /* RS485 UART 초기화 — bdb_init/zb_init 이후에 해야 GPIO 덮어쓰기 방지 */
+    printf("[BOOT] 6 uart_init_epever\r\n");
     uart_init_epever();
 
     printf("[BOOT] ZB stack init done. joined=%d\r\n",

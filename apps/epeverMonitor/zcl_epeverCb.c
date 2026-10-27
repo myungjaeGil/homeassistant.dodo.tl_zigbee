@@ -35,6 +35,16 @@ void epever_zclIdentifyCmdHandler(u8 endpoint, u16 srcAddr, u16 identifyTime);
  *********************************************************************/
 void epever_zclProcessIncomingMsg(zclIncoming_t *pInHdlrMsg)
 {
+    // printf("[ZCL RX] cmd=0x%x ep=%d cluster=0x%x\r\n",
+           // (unsigned int)pInHdlrMsg->hdr.cmd,
+           // (int)pInHdlrMsg->msg->indInfo.dst_ep,
+           // (unsigned int)pInHdlrMsg->msg->indInfo.cluster_id);
+
+    /* 코디네이터(Z2M)에서 온 ZCL 메시지 → Z2M 연결 살아있음 */
+    if (pInHdlrMsg->msg->indInfo.src_short_addr == 0x0000) {
+        epever_link_alive((pInHdlrMsg->hdr.cmd == ZCL_CMD_DEFAULT_RSP) ? "defaultRsp" : "zcl rx");
+    }
+
     switch (pInHdlrMsg->hdr.cmd) {
 #ifdef ZCL_READ
     case ZCL_CMD_READ_RSP:
@@ -74,39 +84,76 @@ void epever_zclProcessIncomingMsg(zclIncoming_t *pInHdlrMsg)
 #ifdef ZCL_READ
 static void epever_zclReadRspCmd(zclReadRspCmd_t *pReadRspCmd)
 {
-    (void)pReadRspCmd;
+    u8 i;
+    for (i = 0; i < pReadRspCmd->numAttr; i++) {
+        printf("[ZCL] ReadRsp attr=0x%x status=0x%x type=0x%x\r\n",
+               (unsigned int)pReadRspCmd->attrList[i].attrID,
+               (unsigned int)pReadRspCmd->attrList[i].status,
+               (unsigned int)pReadRspCmd->attrList[i].dataType);
+    }
 }
 #endif
 
 #ifdef ZCL_WRITE
 static void epever_zclWriteReqCmd(u8 ep, u16 clusterId, zclWriteCmd_t *pWriteReqCmd)
 {
-    (void)ep; (void)clusterId; (void)pWriteReqCmd;
+    u8 i;
+    for (i = 0; i < pWriteReqCmd->numAttr; i++) {
+        zclWriteRec_t *rec = &pWriteReqCmd->attrList[i];
+        printf("[ZCL] WriteReq ep=%d cluster=0x%x attr=0x%x type=0x%x data[0..1]=%d,%d\r\n",
+               (int)ep, (unsigned int)clusterId,
+               (unsigned int)rec->attrID, (unsigned int)rec->dataType,
+               (int)rec->attrData[0], (int)rec->attrData[1]);
+    }
 }
 
 static void epever_zclWriteRspCmd(zclWriteRspCmd_t *pWriteRspCmd)
 {
-    (void)pWriteRspCmd;
+    u8 i;
+    for (i = 0; i < pWriteRspCmd->numAttr; i++) {
+        printf("[ZCL] WriteRsp attr=0x%x status=0x%x\r\n",
+               (unsigned int)pWriteRspCmd->attrList[i].attrID,
+               (unsigned int)pWriteRspCmd->attrList[i].status);
+    }
 }
 #endif
 
 static void epever_zclDfltRspCmd(zclDefaultRspCmd_t *pDftRspCmd)
 {
     (void)pDftRspCmd;
+    // printf("[ZCL] DefaultRsp cmd=0x%x status=0x%x\r\n",
+           // (unsigned int)pDftRspCmd->commandID,
+           // (unsigned int)pDftRspCmd->statusCode);
 }
 
 #ifdef ZCL_REPORT
 static void epever_zclCfgReportCmd(zclCfgReportCmd_t *pCfgReportCmd)
 {
-    (void)pCfgReportCmd;
+    u8 i;
+    for (i = 0; i < pCfgReportCmd->numAttr; i++) {
+        zclCfgReportRec_t *rec = &pCfgReportCmd->attrList[i];
+        printf("[ZCL] CfgReport attr=0x%x type=0x%x min=%d max=%d\r\n",
+               (unsigned int)rec->attrID, (unsigned int)rec->dataType,
+               (int)rec->minReportInt, (int)rec->maxReportInt);
+    }
 }
 static void epever_zclCfgReportRspCmd(zclCfgReportRspCmd_t *pCfgReportRspCmd)
 {
-    (void)pCfgReportRspCmd;
+    u8 i;
+    for (i = 0; i < pCfgReportRspCmd->numAttr; i++) {
+        printf("[ZCL] CfgReportRsp attr=0x%x status=0x%x\r\n",
+               (unsigned int)pCfgReportRspCmd->attrList[i].attrID,
+               (unsigned int)pCfgReportRspCmd->attrList[i].status);
+    }
 }
 static void epever_zclReportCmd(zclReportCmd_t *pReportCmd)
 {
-    (void)pReportCmd;
+    u8 i;
+    for (i = 0; i < pReportCmd->numAttr; i++) {
+        printf("[ZCL] Report attr=0x%x type=0x%x\r\n",
+               (unsigned int)pReportCmd->attrList[i].attrID,
+               (unsigned int)pReportCmd->attrList[i].dataType);
+    }
 }
 #endif
 
@@ -114,6 +161,7 @@ static void epever_zclReportCmd(zclReportCmd_t *pReportCmd)
 status_t epever_basicCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload)
 {
     (void)pAddrInfo; (void)cmdPayload;
+    printf("[ZCL] Basic cmd=0x%x\r\n", (unsigned int)cmdId);
     if (cmdId == ZCL_CMD_BASIC_RESET_FAC_DEFAULT) {
         /* Factory reset */
     }
@@ -143,7 +191,8 @@ void epever_zclIdentifyTimerStop(void)
 
 void epever_zclIdentifyCmdHandler(u8 endpoint, u16 srcAddr, u16 identifyTime)
 {
-    (void)endpoint; (void)srcAddr;
+    printf("[ZCL] Identify ep=%d src=0x%x time=%d s\r\n",
+           (int)endpoint, (unsigned int)srcAddr, (int)identifyTime);
     g_zcl_identifyAttrs.identifyTime = identifyTime;
 
     if (identifyTime == 0) {
@@ -160,6 +209,7 @@ void epever_zclIdentifyCmdHandler(u8 endpoint, u16 srcAddr, u16 identifyTime)
 
 static void epever_zcltriggerCmdHandler(zcl_triggerEffect_t *pTriggerEffect)
 {
+    printf("[ZCL] TriggerEffect id=%d\r\n", (int)pTriggerEffect->effectId);
     switch (pTriggerEffect->effectId) {
     case IDENTIFY_EFFECT_BLINK:          light_blink_start(1,  500, 500);  break;
     case IDENTIFY_EFFECT_BREATHE:        light_blink_start(15, 300, 700);  break;

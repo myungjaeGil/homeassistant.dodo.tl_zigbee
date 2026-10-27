@@ -440,13 +440,23 @@ void epever_attrs_init(void)
     g_epever_tempAttrs.measuredValue      = 0;
     g_epever_socAttrs.presentValue        = 0.0f;
 
-    /* NV에서 poll_interval 복원 */
+    printf("[INIT] d1 attrs zeroed\r\n");
+
+    /* NV에서 poll_interval 복원
+     * EPEVER_NV_RESTORE_ENABLE 을 0 으로 빌드하면 NV 읽기를 건너뜀 (진단용) */
+#ifndef EPEVER_NV_RESTORE_ENABLE
+#define EPEVER_NV_RESTORE_ENABLE    1
+#endif
+#if EPEVER_NV_RESTORE_ENABLE
     {
         epever_cfgAttr_t saved;
+        printf("[INIT] d2 nv_flashReadNew(APP, item=0x%x, len=%d)\r\n",
+               (unsigned int)NV_ITEM_EPEVER_CFG, (int)sizeof(epever_cfgAttr_t));
         nv_sts_t st = nv_flashReadNew(1, NV_MODULE_APP,
                                       NV_ITEM_EPEVER_CFG,
                                       sizeof(epever_cfgAttr_t),
                                       (u8*)&saved);
+        printf("[INIT] d3 nv read st=%d\r\n", (int)st);
         if (st == NV_SUCC) {
             if (saved.pollInterval >= 5 && saved.pollInterval <= 3600) {
                 g_epever_cfgAttrs.pollInterval = saved.pollInterval;
@@ -455,6 +465,9 @@ void epever_attrs_init(void)
             }
         }
     }
+#else
+    printf("[INIT] d2 NV restore skipped (EPEVER_NV_RESTORE_ENABLE=0)\r\n");
+#endif
 }
 
 /*====================================================================
@@ -495,7 +508,7 @@ void epever_attrs_update(const epever_data_t *d)
 
             s_last_report_tick = now;
 
-            printf("[ZCL] Report EP1-5 to coord\r\n");
+            // printf("[ZCL] Report EP1-5 to coord\r\n");
 
             epInfo_t dstEp;
             TL_SETSTRUCTCONTENT(dstEp, 0);
