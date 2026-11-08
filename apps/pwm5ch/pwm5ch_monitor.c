@@ -33,7 +33,13 @@
 app_ctx_t gPwmCtx;
 
 #ifdef ZCL_OTA
-extern ota_callBack_t pwm5ch_otaCb;
+#ifndef OTA_PERIODIC_QUERY_INTERVAL
+#define OTA_PERIODIC_QUERY_INTERVAL     (15 * 60)   /* 초 — OTA 서버 조회 주기 */
+#endif
+void pwm5ch_otaProcessMsgHandler(u8 evt, u8 status);
+ota_callBack_t pwm5ch_otaCb = {
+    pwm5ch_otaProcessMsgHandler,
+};
 ota_preamble_t pwm5ch_otaInfo = {
     .fileVer          = FILE_VERSION,
     .imageType        = IMAGE_TYPE,
@@ -123,6 +129,7 @@ static void user_app_init(void)
 
     /* NV에서 채널 상태 복원 */
     pwm_attrs_init();
+    pwm_dimRange_init();    /* 채널별 디밍 노출 구간 복원 */
 
     for (i = 0; i < PWM_EP_COUNT; i++) {
         zcl_register(ep_list[i], g_epClusterNum[i],
@@ -131,6 +138,12 @@ static void user_app_init(void)
 
 #if ZCL_GP_SUPPORT
     gp_init(PWM_EP_CH0);
+#endif
+
+#ifdef ZCL_OTA
+    /* [수정] 기존에는 ota_init 호출이 없어 OTA 가 동작하지 않았음 */
+    ota_init(OTA_TYPE_CLIENT, (af_simple_descriptor_t *)&pwm_ep1_simpleDesc,
+             &pwm5ch_otaInfo, &pwm5ch_otaCb);
 #endif
 
     /* NV 복원 상태를 PWM 하드웨어에 즉시 반영 */
@@ -144,44 +157,90 @@ static void user_app_init(void)
 }
 
 /*====================================================================
- * OTA 콜백 (간이)
+ * OTA 콜백
  *==================================================================*/
-void pwm5ch_otaProcessMsgHandler(u8 evt, u8 *arg)
+#ifdef ZCL_OTA
+void pwm5ch_otaProcessMsgHandler(u8 evt, u8 status)
 {
-    (void)arg;
     switch (evt) {
     case OTA_EVT_START:
         DBG_LOG("[OTA] Start\r\n");
-        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         break;
     case OTA_EVT_COMPLETE:
-        DBG_LOG("[OTA] Complete\r\n");
+        DBG_LOG("[OTA] Complete status=%d\r\n", (int)status);
+        if (status == ZCL_STA_SUCCESS) {
+            pwm_attrs_flush();      /* 재부팅 전 예약된 NV 저장 마무리 */
+        }
         break;
     default:
         break;
     }
 }
+#endif
 
-ota_callBack_t pwm5ch_otaCb;
+/*====================================================================
+ * Network steering 재시도 — 타이머 1개만 유지
+ *   [수정] 기존에는 실패할 때마다 10초 주기 타이머가 새로 생겨
+ *          코디네이터 부재 시 타이머가 계속 늘어났음
+ *==================================================================*/
+#define STEER_RETRY_MS      10000
+
+static ev_timer_event_t *s_steerRetryTmr = NULL;
+
+static s32 steer_retry_cb(void *arg)
+{
+    (void)arg;
+    if (zb_isDeviceJoinedNwk()) {
+        s_steerRetryTmr = NULL;
+        return -1;
+    }
+    DBG_LOG("[ZB] steer_retry\r\n");
+    bdb_networkSteerStart();
+    return STEER_RETRY_MS;
+}
+
+static void steer_retry_schedule(u32 delay_ms)
+{
+    if (s_steerRetryTmr) return;    /* 이미 예약됨 — 중복 생성 금지 */
+    s_steerRetryTmr = TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, delay_ms);
+}
+
+static void steer_retry_cancel(void)
+{
+    if (s_steerRetryTmr) {
+        TL_ZB_TIMER_CANCEL(&s_steerRetryTmr);
+        s_steerRetryTmr = NULL;
+    }
+}
+
+/* 조인 상태에 맞춰 LED / OLED 갱신 */
+static void app_update_join_indication(void)
+{
+    bool joined = zb_isDeviceJoinedNwk();
+    led_power_set_state(joined ? LED_PWR_STATE_JOINED : LED_PWR_STATE_NOT_JOINED);
+    oled_ui_notify_zigbee(joined ? 1 : 0);
+}
 
 /*====================================================================
  * ZDO 이벤트 핸들러
  *==================================================================*/
-static s32 steer_retry_cb(void *arg)
+static s32 leave_check_cb(void *arg)
 {
     (void)arg;
-    if (zb_isDeviceJoinedNwk()) return -1;
-    DBG_LOG("[ZB] steer_retry\r\n");
-    bdb_networkSteerStart();
-    return 10000;
+    /* 라우터에서는 자식 노드가 나갈 때도 LeaveInd 가 올 수 있으므로
+     * 실제로 자신이 네트워크에서 빠졌는지 확인 후 처리 */
+    if (!zb_isDeviceJoinedNwk()) {
+        app_update_join_indication();
+        steer_retry_schedule(3000);
+    }
+    return -1;
 }
 
 void pwm_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     (void)pLeaveInd;
     DBG_LOG("[ZB] LeaveInd\r\n");
-    led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-    TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 3000);
+    TL_ZB_TIMER_SCHEDULE(leave_check_cb, NULL, 500);
 }
 
 void pwm_leaveCnfHandler(nlme_leave_cnf_t *pLeaveCnf) { (void)pLeaveCnf; }
@@ -194,9 +253,10 @@ bool pwm_nwkUpdateIndicateHandler(nwkCmd_nwkUpdate_t *pNwkUpdate)
 
 void pwm_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
 {
+    /* [수정] route failure 등 NWK status 는 라우터에서 흔함 —
+     *        조인 상태와 무관하므로 LED 를 바꾸지 않고 로그만 남김 */
     if (pNwkStatusInd) {
         DBG_LOG("[ZB] NwkStatus: %d\r\n", (int)pNwkStatusInd->status);
-        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
     }
 }
 
@@ -214,6 +274,9 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 
     if (joinedNetwork) {
         led_power_set_state(LED_PWR_STATE_JOINED);
+#ifdef ZCL_OTA
+        ota_queryStart(OTA_PERIODIC_QUERY_INTERVAL);
+#endif
     } else {
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         bdb_networkSteerStart();
@@ -225,14 +288,18 @@ static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
     (void)arg;
     DBG_LOG("[ZB] CommissioningCb: status=%d\r\n", (int)status);
     if (status == BDB_COMMISSION_STA_SUCCESS) {
-        DBG_LOG("[ZB] Joined! ShortAddr=%d\r\n", (int)zb_getLocalShortAddr());
-        led_power_set_state(LED_PWR_STATE_JOINED);
+        DBG_LOG("[ZB] Joined! ShortAddr=0x%04x\r\n", (int)zb_getLocalShortAddr());
+        steer_retry_cancel();
+        app_update_join_indication();
+#ifdef ZCL_OTA
+        ota_queryStart(OTA_PERIODIC_QUERY_INTERVAL);
+#endif
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
         DBG_LOG("[ZB] Steering...\r\n");
     } else {
         DBG_LOG("[ZB] Steering failed -> retry 10s\r\n");
-        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-        TL_ZB_TIMER_SCHEDULE(steer_retry_cb, NULL, 10000);
+        app_update_join_indication();
+        steer_retry_schedule(STEER_RETRY_MS);
     }
 }
 
@@ -251,7 +318,21 @@ void app_task(void)
     app_key_handler();
     localPermitJoinState();
     ir_recv_poll();
-    oled_ui_update();
+    oled_ui_update();       /* 내부에서 변경 시에만 + 200ms 간격 제한 */
+
+    /* 디밍 노출 구간 속성 변경 감지 (Write 응답 경로와 별개로 500ms 마다 확인) */
+    {
+        static u32 s_dimChkTick = 0;
+        if (clock_time_exceed(s_dimChkTick, 500 * 1000)) {
+            s_dimChkTick = clock_time();
+            pwm_dimRange_check();
+        }
+    }
+
+    /* [수정] 설정된 attribute reporting 전송 — 없으면 IR 등 로컬 변경이 HA 에 반영 안 됨 */
+    if (BDB_STATE_GET() == BDB_STATE_IDLE) {
+        report_handler();
+    }
 }
 
 /*====================================================================
@@ -277,9 +358,9 @@ void user_init(bool isRetention)
     DBG_LOG(" App v%d.%d  Stack v%d.%d\r\n",
            (int)((APP_RELEASE >> 4) & 0xF), (int)(APP_RELEASE & 0xF),
            (int)((STACK_RELEASE >> 4) & 0xF), (int)(STACK_RELEASE & 0xF));
-    DBG_LOG(" Clock: %dMHz  PWM: %dkHz\r\n",
+    DBG_LOG(" Clock: %dMHz  PWM: %dHz\r\n",
            (int)(CLOCK_SYS_CLOCK_HZ / 1000000),
-           (int)(CLOCK_SYS_CLOCK_HZ / PWM_MAX_TICK / 1000));
+           (int)(CLOCK_SYS_CLOCK_HZ / PWM_MAX_TICK));
     DBG_LOG(" EP1~EP5: 개별 채널  EP6: 마스터 디밍\r\n");
     DBG_LOG("========================================\r\n");
 

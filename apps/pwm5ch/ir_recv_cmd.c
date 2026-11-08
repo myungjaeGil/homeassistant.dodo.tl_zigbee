@@ -25,15 +25,17 @@
 #include "pwm5ch_monitor.h"
 #include "oled_ui.h"
 
-extern void pwm_attrs_save(u8 ep_idx);
 
 /*====================================================================
  * 내부 헬퍼
  *==================================================================*/
+/* [수정] startUpOnOff / startUpLevel 을 덮어쓰지 않음.
+ *   기존에는 IR 조작 값이 startUp 값으로 고정 저장되어,
+ *   이후 Zigbee 로 끈 채널이 전원 재투입 시 다시 켜지는 문제가 있었음.
+ *   startUp = 0xFF(이전 상태 복원) 이므로 현재 상태만 저장하면 됨. */
 static void ir_ch_set_onoff(u8 ep_idx, bool on)
 {
     g_pwmChAttrs[ep_idx].onOff = on;
-    g_pwmChAttrs[ep_idx].startUpOnOff = on ? 0x01 : 0x00;  /* 리셋 후 복원 시 적용되도록 */
     pwm_hw_apply(ep_idx);
     pwm_attrs_save(ep_idx);
 }
@@ -51,7 +53,6 @@ static void ir_ch_adjust(u8 ep_idx, s8 delta_pct)
     if (cur < 13)  cur = 13;   /* 최소 5% */
     if (cur > 254) cur = 254;
     g_pwmChAttrs[ep_idx].currentLevel = (u8)cur;
-    g_pwmChAttrs[ep_idx].startUpLevel = (u8)cur;   /* 리셋 후 복원 시 적용되도록 */
     g_pwmChAttrs[ep_idx].onOff = TRUE;
     pwm_hw_apply(ep_idx);
     pwm_attrs_save(ep_idx);
@@ -67,7 +68,6 @@ static void ir_master_adjust(s8 delta_pct)
     if (cur < 13)  cur = 13;   /* 최소 5% */
     if (cur > 254) cur = 254;
     g_pwmChAttrs[5].currentLevel = (u8)cur;
-    g_pwmChAttrs[5].startUpLevel = (u8)cur;   /* 리셋 후 복원 시 적용되도록 */
     g_pwmChAttrs[5].onOff = TRUE;
     /* ep_idx=5 → pwm_hw_apply 내부에서 CH0~CH4 전체 combined 재계산
      * pwm5ch_ctrl.c: combined = ch_level * master_level / 254 */

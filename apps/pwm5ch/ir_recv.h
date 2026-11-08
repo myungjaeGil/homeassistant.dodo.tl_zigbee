@@ -1,8 +1,8 @@
 #pragma once
 /*********************************************************************
  * @file    ir_recv.h
- * @brief   NEC IR 수신 — GPIO_PD4 (Pin11)
- *           FALLING=GPIO_EN, RISING=RISC0 양방향 IRQ
+ * @brief   NEC IR 수신 — GPIO_PA0 (Pin12)
+ *           GPIO_EN IRQ, 엣지마다 극성(POL) 전환으로 양방향 감지
  *
  * NEC 프로토콜:
  *   Leader  : 9ms LOW + 4.5ms HIGH
@@ -19,9 +19,10 @@
 
 #include "tl_common.h"
 
-/* IR 수신 핀 — board_8258_zt3l.h 에서 정의 (GPIO_PD4, Pin11) */
+/* IR 수신 핀 — board_8258_zt3l.h 에서 정의 (GPIO_PA0, Pin12)
+ * 기본값을 두지 않음: PD4 는 BUTTON1 과 충돌하므로 누락 시 빌드 에러로 알림 */
 #ifndef IR_RECV_PIN
-#define IR_RECV_PIN     GPIO_PD4
+#error "IR_RECV_PIN 이 정의되지 않았습니다 (board_8258_zt3l.h 확인)"
 #endif
 
 /* 수신 없음 반환값 */

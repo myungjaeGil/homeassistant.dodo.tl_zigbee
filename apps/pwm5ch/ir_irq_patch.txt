@@ -26,12 +26,7 @@ void gpio_irq_handler(void)
     /* PA0 IR 수신 인터럽트 */
     if (gpio_read_interrupt_flag(IR_RECV_PIN)) {
         gpio_clr_interrupt_flag(IR_RECV_PIN);
-        ir_recv_gpio_irq();
-
-        /* 다음 엣지 방향 전환 (FALLING↔RISING) */
-        u8 cur_level = gpio_read(IR_RECV_PIN);
-        gpio_set_interrupt_pol(IR_RECV_PIN,
-            cur_level ? POL_FALLING : POL_RISING);
+        ir_recv_gpio_irq();     /* 극성 전환은 함수 내부에서 처리 — 여기서 중복 전환 금지 */
     }
 }
 
@@ -46,11 +41,7 @@ void gpio_irq_handler(void)
   {
       if (reg_irq_src & FLD_IRQ_GPIO_EN) {
           reg_irq_src = FLD_IRQ_GPIO_EN;   /* 클리어 */
-          ir_recv_gpio_irq();
-          /* 엣지 방향 전환 */
-          u8 lv = gpio_read(IR_RECV_PIN);
-          gpio_set_interrupt_pol(IR_RECV_PIN,
-              lv ? POL_FALLING : POL_RISING);
+          ir_recv_gpio_irq();              /* 극성 전환 포함 */
       }
   }
 

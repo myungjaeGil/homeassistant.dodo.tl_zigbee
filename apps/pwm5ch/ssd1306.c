@@ -154,6 +154,7 @@ void ssd1306_pixel(u8 x, u8 y, u8 on)
 void ssd1306_putchar(u8 page, u8 col, char c)
 {
     if (page >= SSD1306_PAGES) return;
+    if (c >= 'a' && c <= 'z') c -= ('a' - 'A');   /* 폰트에 소문자 없음 → 대문자로 표시 */
     int idx = (u8)c - FONT_OFFSET;
     if (idx < 0 || idx >= (int)FONT_COUNT) idx = 0;  /* 지원 외 → 공백 */
 

@@ -9,9 +9,38 @@
 #include "i2c_sw.h"
 #include "ssd1306.h"
 #include "pwm5ch_ep.h"
+#include "zb_api.h"
+
+/*--------------------------------------------------------------------
+ * 갱신 정책
+ *   [수정] 기존에는 메인 루프마다 512B 전체 프레임을 소프트 I2C 로 전송
+ *          → 루프가 수십 ms 씩 멈춰 Zigbee 처리 지연.
+ *   표시 내용이 바뀐 경우에만, 최소 OLED_MIN_INTERVAL_MS 간격으로 갱신.
+ *------------------------------------------------------------------*/
+#define OLED_MIN_INTERVAL_MS    200
 
 static u8   s_zb_connected = 0;
 static char s_ir_msg[22]   = "";   /* Page3 IR 로그 — 최대 21자 */
+static bool s_dirty        = TRUE;
+static u32  s_last_draw    = 0;
+
+/* 화면에 표시되는 값의 스냅샷 — 바뀌었는지 비교용 */
+typedef struct {
+    u8 onOff[PWM_EP_COUNT];
+    u8 level[PWM_EP_COUNT];
+    u8 zb;
+} oled_snapshot_t;
+static oled_snapshot_t s_snap;
+
+static void _take_snapshot(oled_snapshot_t *sn)
+{
+    u8 i;
+    for (i = 0; i < PWM_EP_COUNT; i++) {
+        sn->onOff[i] = g_pwmChAttrs[i].onOff ? 1 : 0;
+        sn->level[i] = g_pwmChAttrs[i].currentLevel;
+    }
+    sn->zb = s_zb_connected;
+}
 
 /* ON: 채워진 사각형, OFF: 빈 사각형 (5×6px) */
 static void _draw_onoff_icon(u8 page, u8 col, u8 on)
@@ -39,7 +68,7 @@ static void _draw_onoff_icon(u8 page, u8 col, u8 on)
 /* 채널 1개: "N:[아이콘]PCT " — 36px */
 static void _draw_channel(u8 page, u8 col, u8 ch_idx)
 {
-    char num[2] = { '1' + ch_idx, '\0' };
+    char num[2] = { (ch_idx == 5) ? 'M' : (char)('1' + ch_idx), '\0' };
     ssd1306_puts(page, col, num);       col += 6;
     ssd1306_putchar(page, col, ':');    col += 6;
 
@@ -59,7 +88,7 @@ void oled_ui_init(void)
 
 void oled_ui_notify_zigbee(u8 connected)
 {
-    s_zb_connected = connected;
+    s_zb_connected = connected ? 1 : 0;
 }
 
 /*--------------------------------------------------------------------
@@ -73,10 +102,25 @@ void oled_ui_notify_ir(const char *msg)
         s_ir_msg[i] = msg[i];
     }
     s_ir_msg[i] = '\0';
+    s_dirty = TRUE;
 }
 
 void oled_ui_update(void)
 {
+    oled_snapshot_t now;
+
+    if (!clock_time_exceed(s_last_draw, OLED_MIN_INTERVAL_MS * 1000)) return;
+
+    /* 조인 상태는 직접 폴링 — 콜백 누락(steering 성공, leave 등)에도 반영 */
+    s_zb_connected = zb_isDeviceJoinedNwk() ? 1 : 0;
+
+    _take_snapshot(&now);
+    if (!s_dirty && memcmp(&now, &s_snap, sizeof(now)) == 0) return;
+
+    s_snap      = now;
+    s_dirty     = FALSE;
+    s_last_draw = clock_time();
+
     ssd1306_clear();
 
     /* Page0: 장치명 + Zigbee 상태 */

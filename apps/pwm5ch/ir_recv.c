@@ -60,6 +60,13 @@ static volatile u8   s_addr   = 0;
 static volatile bool s_repeat = FALSE;
 static volatile bool s_ready  = FALSE;
 
+/* 디버그 — ISR 에서는 값만 저장하고 출력은 ir_recv_poll() 에서
+ * (ISR 안 printf 는 1Mbaud 소프트 UART 로 수백 us 블로킹 + 메인 printf 와 충돌) */
+#if DEBUG_ENABLE
+static volatile u32  s_dbg_frame = 0;
+static volatile u8   s_dbg_evt   = 0;   /* 0=없음, 1=OK, 2=FAIL */
+#endif
+
 /*====================================================================
  * 헬퍼
  *==================================================================*/
@@ -171,17 +178,27 @@ void ir_recv_gpio_irq(void)
                 u8 cmd      = (s_bits >> 16) & 0xFF;
                 u8 cmd_inv  = (s_bits >> 24) & 0xFF;
 
-                if (((addr & addr_inv) == 0) || ((u8)(~cmd) == cmd_inv)) {
+                (void)addr_inv;
+                /* [수정] cmd 반전 검증은 필수.
+                 *   주소는 표준 NEC(addr_inv == ~addr) 와 확장 NEC(16bit 주소)
+                 *   모두 허용해야 하므로 검증하지 않음.
+                 *   기존 (addr & addr_inv)==0 || cmd검증 은 OR 라서
+                 *   cmd 가 깨진 프레임도 통과했음. */
+                if ((u8)(~cmd) == cmd_inv) {
                     s_addr   = addr;
                     s_cmd    = cmd;
                     s_repeat = FALSE;
                     s_ready  = TRUE;
-                    DBG_LOG("[IR] NEC OK addr=0x%02x cmd=0x%02x\r\n",
-                           (int)addr, (int)cmd);
-                } else {
-                    DBG_LOG("[IR] NEC FAIL addr=0x%02x inv=0x%02x cmd=0x%02x inv=0x%02x\r\n",
-                           (int)addr, (int)addr_inv, (int)cmd, (int)cmd_inv);
+#if DEBUG_ENABLE
+                    s_dbg_evt = 1;
+#endif
                 }
+#if DEBUG_ENABLE
+                else {
+                    s_dbg_evt = 2;
+                }
+                s_dbg_frame = s_bits;
+#endif
                 ir_reset_to_idle();
             } else {
                 s_state = IR_STATE_DATA;
@@ -231,15 +248,36 @@ void ir_recv_poll(void)
         }
     }
 
+#if DEBUG_ENABLE
+    if (s_dbg_evt) {
+        u32 f  = s_dbg_frame;
+        u8  ev = s_dbg_evt;
+        s_dbg_evt = 0;
+        DBG_LOG("[IR] NEC %s addr=0x%02x inv=0x%02x cmd=0x%02x inv=0x%02x\r\n",
+                (ev == 1) ? "OK" : "FAIL",
+                (int)(f & 0xFF), (int)((f >> 8) & 0xFF),
+                (int)((f >> 16) & 0xFF), (int)((f >> 24) & 0xFF));
+    }
+#endif
+
     if (s_ready) {
+        /* ISR 와 경합 방지 — 값 복사 구간만 IRQ 잠금 */
+        u32  r      = irq_disable();
+        u8   addr   = s_addr;
+        u8   cmd    = s_cmd;
+        bool repeat = s_repeat;
         s_ready = FALSE;
-        ir_recv_on_cmd(s_addr, s_cmd, s_repeat);
+        irq_restore(r);
+
+        ir_recv_on_cmd(addr, cmd, repeat);
     }
 }
 
 /*====================================================================
  * ir_recv_get_cmd / ir_recv_get_addr
  *==================================================================*/
+/* 참고: ir_recv_poll() 이 ir_recv_on_cmd() 로 이미 소비하므로
+ *       폴링 방식으로 쓰려면 ir_recv_poll() 대신 이 함수를 사용할 것 */
 u8 ir_recv_get_cmd(void)
 {
     if (!s_ready) return IR_CMD_NONE;

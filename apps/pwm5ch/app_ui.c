@@ -39,7 +39,7 @@ void app_key_handler(void)
 
         if (!s_btn_long_handled && held_ms >= BUTTON_LONG_PRESS_MS) {
             s_btn_long_handled = TRUE;
-            printf("[UI] Long press -> Factory Reset\r\n");
+            DBG_LOG("[UI] Long press -> Factory Reset\r\n");
             led_power_set_state(LED_PWR_STATE_RESET);
             zb_factoryReset();
         }

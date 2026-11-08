@@ -110,11 +110,11 @@ enum { VK_SW1 = 0x01, VK_SW2 = 0x02 };
 #define PD2_OUTPUT_ENABLE       1
 #define PD2_INPUT_ENABLE        0
 
-#define PB4_FUNC                AS_PWM5
+#define PB4_FUNC                AS_PWM4
 #define PB4_OUTPUT_ENABLE       1
 #define PB4_INPUT_ENABLE        0
 
-#define PB5_FUNC                AS_PWM4
+#define PB5_FUNC                AS_PWM5
 #define PB5_OUTPUT_ENABLE       1
 #define PB5_INPUT_ENABLE        0
 
