@@ -38,11 +38,33 @@ extern "C" {
 #define DEBUG_BAUDRATE              			1000000//1M
 #define USB_PRINTF_MODE                         0
 
+/*--------------------------------------------------------------------------
+ * 디버그 로그 출력 제어 (PWM5CH / heaterRC 와 동일 방식)
+ *   1: DBG_LOG 출력
+ *   0: DBG_LOG 비활성 (릴리즈 빌드 — PD7 soft-TX 동작도 줄어듦)
+ *------------------------------------------------------------------------*/
+#define DEBUG_ENABLE                            1
+
+#if DEBUG_ENABLE
+    #define DBG_LOG(...)    printf(__VA_ARGS__)
+#else
+    #define DBG_LOG(...)    do{}while(0)
+#endif
+
+/*--------------------------------------------------------------------------
+ * 수동 리포트 (epever_attrs_update 에서 매 폴링마다 11개 속성을 코디네이터로 직접 전송)
+ *   1: 사용 — Z2M 바인딩/리포팅 설정이 없어도 값이 전달됨 (기존 동작)
+ *   0: 미사용 — 표준 ZCL 리포팅(report_handler)만 사용.
+ *      Z2M 컨버터의 configure 에서 bind + configureReporting 을 하는 경우 0 으로 두면
+ *      같은 값이 두 번 보고되는 일이 없어짐
+ *------------------------------------------------------------------------*/
+#define EPEVER_MANUAL_REPORT                    1
+
 /* HCI interface */
 #define	ZBHCI_UART                              0
 
 /* BDB */
-#define TOUCHLINK_SUPPORT                       1
+#define TOUCHLINK_SUPPORT                       0   /* 불필요 + 근처 touchlink 리셋 위험 → 비활성 */
 #define FIND_AND_BIND_SUPPORT                   0
 
 /* Voltage detect module */

@@ -64,7 +64,10 @@
  * Refer to ZCL OTA specification for details.
  */
 #define MANUFACTURER_CODE_TELINK        0x1141//Telink ID
-#define	IMAGE_TYPE                      ((CHIP_TYPE << 8) | IMAGE_TYPE_LIGHT)
+/* EPever 모니터 전용 이미지 타입 — PWM5CH(IMAGE_TYPE_LIGHT) 등 다른 장치와 겹치지 않게 해서
+ * 다른 장치용 OTA 이미지가 이 보드에 올라가지 않도록 함 */
+#define IMAGE_TYPE_EPEVER               0x45    /* 'E' */
+#define	IMAGE_TYPE                      ((CHIP_TYPE << 8) | IMAGE_TYPE_EPEVER)
 #define	FILE_VERSION                    ((APP_RELEASE << 24) | (APP_BUILD << 16) | (STACK_RELEASE << 8) | STACK_BUILD)
 
 /* Pre-compiled link configuration. */

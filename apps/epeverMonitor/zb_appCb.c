@@ -13,27 +13,34 @@
 #include "factory_reset.h"
 
 /*--------------------------------------------------------------------
- * OTA 콜백 — SDK ota_callBack_t 구조체 필드 확인 필요
- * 현재는 빈 선언으로 두고 OTA 이벤트는 별도 함수로 처리
+ * OTA 콜백
+ *   [수정] 시그니처를 SDK 의 ota_procMsgCb_t (u8 evt, u8 status) 에 맞추고
+ *   epever_otaCb 로 등록 (기존: 빈 sampleLight_otaCb, ota_init 미호출 → OTA 미동작)
  *------------------------------------------------------------------*/
-void epever_otaProcessMsgHandler(u8 evt, u8 *arg)
+#ifndef OTA_PERIODIC_QUERY_INTERVAL
+#define OTA_PERIODIC_QUERY_INTERVAL     (15 * 60)   /* 초 — OTA 서버 조회 주기 */
+#endif
+
+void epever_otaProcessMsgHandler(u8 evt, u8 status)
 {
-    (void)arg;
     switch (evt) {
     case OTA_EVT_START:
-        printf("[OTA] Start\r\n");
-        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
+        DBG_LOG("[OTA] Start\r\n");
         break;
     case OTA_EVT_COMPLETE:
-        printf("[OTA] Complete -> reboot\r\n");
+        DBG_LOG("[OTA] Complete status=%d\r\n", (int)status);
         break;
     default:
-        printf("[OTA] evt=%d\r\n", (int)evt);
+        DBG_LOG("[OTA] evt=%d status=%d\r\n", (int)evt, (int)status);
         break;
     }
 }
 
-ota_callBack_t sampleLight_otaCb;
+#ifdef ZCL_OTA
+ota_callBack_t epever_otaCb = {
+    epever_otaProcessMsgHandler,
+};
+#endif
 
 /*--------------------------------------------------------------------
  * Network Steering 재시도 타이머
@@ -50,10 +57,10 @@ static s32 steer_retry_cb(void *arg)
     s_steerTimerEvt = NULL;     /* -1 반환 시 SDK가 이벤트를 해제함 */
 
     if (zb_isDeviceJoinedNwk()) {
-        printf("[ZB] steer_retry: already joined, stop\r\n");
+        DBG_LOG("[ZB] steer_retry: already joined, stop\r\n");
         return -1;
     }
-    printf("[ZB] steer_retry: start NetworkSteer\r\n");
+    DBG_LOG("[ZB] steer_retry: start NetworkSteer\r\n");
     bdb_networkSteerStart();
     return -1;
 }
@@ -93,7 +100,7 @@ void epever_link_alive(const char *why)
         TL_ZB_TIMER_CANCEL(&s_linkToEvt);
     }
     if (s_linkMiss >= LINK_MISS_MAX) {
-        printf("[LINK] Z2M reconnected (%s)\r\n", why);
+        DBG_LOG("[LINK] Z2M reconnected (%s)\r\n", why);
     }
     s_linkWaiting = FALSE;
     s_linkMiss    = 0;
@@ -107,10 +114,10 @@ static s32 link_timeout_cb(void *arg)
     if (s_linkWaiting) {
         s_linkWaiting = FALSE;
         if (s_linkMiss < 0xFF) s_linkMiss++;
-        printf("[LINK] no response from Z2M (miss %d/%d)\r\n",
+        DBG_LOG("[LINK] no response from Z2M (miss %d/%d)\r\n",
                (int)s_linkMiss, (int)LINK_MISS_MAX);
         if (s_linkMiss == LINK_MISS_MAX) {
-            printf("[LINK] Z2M disconnected\r\n");
+            DBG_LOG("[LINK] Z2M disconnected\r\n");
             led_power_set_link(FALSE);
         }
     }
@@ -140,7 +147,7 @@ static s32 link_hb_cb(void *arg)
                              ZCL_ATTRID_BASIC_ZCL_VER,
                              ZCL_DATA_TYPE_UINT8,
                              (u8 *)&g_zcl_basicAttrs.zclVersion);
-    // printf("[LINK] heartbeat sent (st=%d)\r\n", (int)st);
+    // DBG_LOG("[LINK] heartbeat sent (st=%d)\r\n", (int)st);
     (void)st;
 
     s_linkWaiting = TRUE;
@@ -179,15 +186,18 @@ static void epever_link_stop(void)
  *------------------------------------------------------------------*/
 static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 {
-    printf("[ZB] bdbInitCb: status=%d joinedNetwork=%d\r\n",
+    DBG_LOG("[ZB] bdbInitCb: status=%d joinedNetwork=%d\r\n",
            (int)status, (int)joinedNetwork);
     if (joinedNetwork) {
-        printf("[ZB] Already joined. ShortAddr=0x%x\r\n",
+        DBG_LOG("[ZB] Already joined. ShortAddr=0x%x\r\n",
                (unsigned int)zb_getLocalShortAddr());
         led_power_set_state(LED_PWR_STATE_JOINED);
         epever_link_start();
+#ifdef ZCL_OTA
+        ota_queryStart(OTA_PERIODIC_QUERY_INTERVAL);
+#endif
     } else {
-        printf("[ZB] Not joined -> start Network Steering\r\n");
+        DBG_LOG("[ZB] Not joined -> start Network Steering\r\n");
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         bdb_networkSteerStart();
     }
@@ -199,19 +209,22 @@ static void zbdemo_bdbInitCb(u8 status, u8 joinedNetwork)
 static void zbdemo_bdbCommissioningCb(u8 status, void *arg)
 {
     (void)arg;
-    printf("[ZB] CommissioningCb: status=%d\r\n", (int)status);
+    DBG_LOG("[ZB] CommissioningCb: status=%d\r\n", (int)status);
     if (status == BDB_COMMISSION_STA_SUCCESS) {
-        printf("[ZB] Joined! ShortAddr=0x%x\r\n",
+        DBG_LOG("[ZB] Joined! ShortAddr=0x%x\r\n",
                (unsigned int)zb_getLocalShortAddr());
         if (s_steerTimerEvt) {
             TL_ZB_TIMER_CANCEL(&s_steerTimerEvt);
         }
         led_power_set_state(LED_PWR_STATE_JOINED);
         epever_link_start();
+#ifdef ZCL_OTA
+        ota_queryStart(OTA_PERIODIC_QUERY_INTERVAL);
+#endif
     } else if (status == BDB_COMMISSION_STA_IN_PROGRESS) {
-        printf("[ZB] Steering in progress...\r\n");
+        DBG_LOG("[ZB] Steering in progress...\r\n");
     } else {
-        printf("[ZB] Steering failed (sta=%d%s) -> retry in 10s\r\n",
+        DBG_LOG("[ZB] Steering failed (sta=%d%s) -> retry in 10s\r\n",
                (int)status, (status == 3) ? " NO_NETWORK" : "");
         led_power_set_state(LED_PWR_STATE_NOT_JOINED);
         steer_retry_schedule(10000);
@@ -231,18 +244,33 @@ bdb_appCb_t g_zbDemoBdbCb = {
 /*--------------------------------------------------------------------
  * ZDO 네트워크 이벤트 콜백
  *------------------------------------------------------------------*/
+/* [수정] 라우터에서는 자식 노드가 나갈 때도 LeaveInd 가 옴 → 바로 미가입 처리하면
+ * 정상 가입 중인데 LED 가 점멸하고 steering 을 다시 시작함.
+ * 500ms 뒤 자신이 실제로 네트워크에서 빠졌는지 확인 (PWM5CH 와 동일 수정) */
+static s32 leave_check_cb(void *arg)
+{
+    (void)arg;
+    if (!zb_isDeviceJoinedNwk()) {
+        DBG_LOG("[ZB] left network -> not joined, steer in 3s\r\n");
+        epever_link_stop();
+        led_power_set_state(LED_PWR_STATE_NOT_JOINED);
+        steer_retry_schedule(3000);
+    } else {
+        DBG_LOG("[ZB] LeaveInd for other node — still joined\r\n");
+    }
+    return -1;
+}
+
 void epever_leaveIndHandler(nlme_leave_ind_t *pLeaveInd)
 {
     (void)pLeaveInd;
-    printf("[ZB] LeaveInd -> not joined, steer in 3s\r\n");
-    epever_link_stop();
-    led_power_set_state(LED_PWR_STATE_NOT_JOINED);
-    steer_retry_schedule(3000);
+    DBG_LOG("[ZB] LeaveInd\r\n");
+    TL_ZB_TIMER_SCHEDULE(leave_check_cb, NULL, 500);
 }
 
 void epever_leaveCnfHandler(nlme_leave_cnf_t *pLeaveCnf)
 {
-    printf("[ZB] LeaveCnf: status=%d\r\n", (int)pLeaveCnf->status);
+    DBG_LOG("[ZB] LeaveCnf: status=%d\r\n", (int)pLeaveCnf->status);
 
     /* 버튼 공장초기화(zb_factoryReset) 후 SDK 가 재부팅하지 않으므로
      * 여기서 미가입 상태로 전환하고 3초 뒤 Network Steering 재시작.
@@ -265,7 +293,7 @@ void epever_nwkStatusIndHandler(zdo_nwk_status_ind_t *pNwkStatusInd)
     if (pNwkStatusInd) {
         /* 일시적인 경로/주소 알림 — 가입 상태는 그대로이므로 LED 는 바꾸지 않음
          * (기존: NOT_JOINED 로 바꾼 뒤 복구하지 않아 가입 중에도 계속 점멸) */
-        printf("[ZB] NwkStatusInd: status=0x%x\r\n",
+        DBG_LOG("[ZB] NwkStatusInd: status=0x%x\r\n",
                (unsigned int)pNwkStatusInd->status);
     }
 }

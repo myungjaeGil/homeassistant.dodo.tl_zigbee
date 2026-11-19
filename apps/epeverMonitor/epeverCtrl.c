@@ -108,7 +108,7 @@ void led_power_set_state(led_pwr_state_t state)
 {
     if (s_led_pwr_state == state) return;
     s_led_pwr_state = state;
-    printf("[LED] state=%d (0=BOOT 1=JOINED 2=NOT_JOINED 3=RESET) z2m=%d\r\n",
+    DBG_LOG("[LED] state=%d (0=BOOT 1=JOINED 2=NOT_JOINED 3=RESET) z2m=%d\r\n",
            (int)state, (int)s_led_link_ok);
     led_power_refresh();
 }
@@ -123,7 +123,7 @@ void led_power_set_link(bool ok)
 {
     if (s_led_link_ok == ok) return;
     s_led_link_ok = ok;
-    printf("[LED] z2m link=%d state=%d\r\n", (int)ok, (int)s_led_pwr_state);
+    DBG_LOG("[LED] z2m link=%d state=%d\r\n", (int)ok, (int)s_led_pwr_state);
     led_power_refresh();
 }
 
@@ -212,6 +212,7 @@ void light_blink_start(u8 times, u16 ledOnTime, u16 ledOffTime)
         gEpeverCtx.ledOffTime = ledOffTime;
         gEpeverCtx.oriSta     = 0;
         gEpeverCtx.sta        = 0;
+        drv_gpio_write(LED_POWER, LED_LEVEL_OFF);   /* 상태 패턴이 남긴 레벨과 무관하게 OFF 에서 시작 */
 
         gEpeverCtx.timerLedEvt =
             TL_ZB_TIMER_SCHEDULE(blink_TimerEvtCb, NULL, ledOnTime);

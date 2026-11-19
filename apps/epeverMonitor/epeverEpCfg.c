@@ -11,6 +11,7 @@
  *********************************************************************/
 
 #include "tl_common.h"
+#include "zb_api.h"
 #include "zcl_include.h"
 #include "epeverMonitor.h"
 #include "epever_ep.h"
@@ -236,33 +237,42 @@ static const zclAttrInfo_t cfg_attrTbl[] = {
 };
 #define ZCL_CFG_ATTR_NUM  (sizeof(cfg_attrTbl) / sizeof(zclAttrInfo_t))
 
-/* poll_interval write 콜백 — epeverMonitor.c의 함수 호출 */
+/* poll_interval 반영 — epeverMonitor.c */
 extern void epever_set_poll_interval(u16 sec);
 
+static u16 s_cfgApplied = 0;    /* 마지막으로 반영·저장한 poll_interval */
+
+/*--------------------------------------------------------------------
+ * epever_cfg_check — poll_interval 속성 변경 감지
+ *   [수정] 기존에는 클러스터 콜백(epever_cfgCb)에서만 처리했는데,
+ *   ZCL Write(전역 명령)는 스택이 속성 메모리에 직접 쓰고 클러스터 콜백을
+ *   부르지 않으므로 폴링 주기 반영과 NV 저장이 되지 않았음.
+ *   → 속성값 자체를 감시해서 바뀌면 보정·반영·저장 (PWM5CH 디밍 구간과 같은 방식)
+ *------------------------------------------------------------------*/
+bool epever_cfg_check(void)
+{
+    u16 sec = g_epever_cfgAttrs.pollInterval;
+
+    if (sec == s_cfgApplied) return FALSE;
+
+    if (sec < 5)    sec = 5;            /* 범위 제한: 5초 ~ 3600초 */
+    if (sec > 3600) sec = 3600;
+    g_epever_cfgAttrs.pollInterval = sec;
+    s_cfgApplied = sec;
+
+    epever_set_poll_interval(sec);
+    nv_flashWriteNew(1, NV_MODULE_APP, NV_ITEM_EPEVER_CFG,
+                     sizeof(epever_cfgAttr_t), (u8 *)&g_epever_cfgAttrs);
+    DBG_LOG("[CFG] poll_interval=%d sec (saved)\r\n", (int)sec);
+    return TRUE;
+}
+
+/* 클러스터 콜백 — 클러스터 전용 명령용. 속성 쓰기는 epever_cfg_check() 가 처리 */
 static status_t epever_cfgCb(zclIncomingAddrInfo_t *pAddrInfo,
                               u8 cmdId, void *cmdPayload)
 {
-    if (cmdId == ZCL_CMD_WRITE || cmdId == ZCL_CMD_WRITE_NO_RSP) {
-        zclWriteCmd_t *pWrite = (zclWriteCmd_t *)cmdPayload;
-        u8 i;
-        for (i = 0; i < pWrite->numAttr; i++) {
-            if (pWrite->attrList[i].attrID == ZCL_ATTRID_EPEVER_POLL_INTERVAL) {
-                u16 sec = BUILD_U16(pWrite->attrList[i].attrData[0],
-                                    pWrite->attrList[i].attrData[1]);
-                /* 범위 제한: 5초 ~ 3600초 */
-                if (sec < 5)    sec = 5;
-                if (sec > 3600) sec = 3600;
-                g_epever_cfgAttrs.pollInterval = sec;
-                epever_set_poll_interval(sec);
-                printf("[CFG] poll_interval=%d sec\r\n", (int)sec);
-                /* NV 저장 */
-                nv_flashWriteNew(1, NV_MODULE_APP,
-                                 NV_ITEM_EPEVER_CFG,
-                                 sizeof(epever_cfgAttr_t),
-                                 (u8*)&g_epever_cfgAttrs);
-            }
-        }
-    }
+    (void)pAddrInfo; (void)cmdId; (void)cmdPayload;
+    epever_cfg_check();
     return ZCL_STA_SUCCESS;
 }
 
@@ -440,7 +450,7 @@ void epever_attrs_init(void)
     g_epever_tempAttrs.measuredValue      = 0;
     g_epever_socAttrs.presentValue        = 0.0f;
 
-    printf("[INIT] d1 attrs zeroed\r\n");
+    DBG_LOG("[INIT] d1 attrs zeroed\r\n");
 
     /* NV에서 poll_interval 복원
      * EPEVER_NV_RESTORE_ENABLE 을 0 으로 빌드하면 NV 읽기를 건너뜀 (진단용) */
@@ -450,24 +460,28 @@ void epever_attrs_init(void)
 #if EPEVER_NV_RESTORE_ENABLE
     {
         epever_cfgAttr_t saved;
-        printf("[INIT] d2 nv_flashReadNew(APP, item=0x%x, len=%d)\r\n",
+        DBG_LOG("[INIT] d2 nv_flashReadNew(APP, item=0x%x, len=%d)\r\n",
                (unsigned int)NV_ITEM_EPEVER_CFG, (int)sizeof(epever_cfgAttr_t));
         nv_sts_t st = nv_flashReadNew(1, NV_MODULE_APP,
                                       NV_ITEM_EPEVER_CFG,
                                       sizeof(epever_cfgAttr_t),
                                       (u8*)&saved);
-        printf("[INIT] d3 nv read st=%d\r\n", (int)st);
+        DBG_LOG("[INIT] d3 nv read st=%d\r\n", (int)st);
         if (st == NV_SUCC) {
             if (saved.pollInterval >= 5 && saved.pollInterval <= 3600) {
                 g_epever_cfgAttrs.pollInterval = saved.pollInterval;
-                printf("[CFG] NV restored poll_interval=%d sec\r\n",
+                s_cfgApplied = saved.pollInterval;  /* 복원값은 다시 저장하지 않음 */
+                DBG_LOG("[CFG] NV restored poll_interval=%d sec\r\n",
                        (int)saved.pollInterval);
             }
         }
     }
 #else
-    printf("[INIT] d2 NV restore skipped (EPEVER_NV_RESTORE_ENABLE=0)\r\n");
+    DBG_LOG("[INIT] d2 NV restore skipped (EPEVER_NV_RESTORE_ENABLE=0)\r\n");
 #endif
+    if (s_cfgApplied == 0) {
+        s_cfgApplied = g_epever_cfgAttrs.pollInterval;  /* 기본값(10초)도 저장 없이 적용된 것으로 */
+    }
 }
 
 /*====================================================================
@@ -498,7 +512,10 @@ void epever_attrs_update(const epever_data_t *d)
     /* EP5: Battery SOC */
     g_epever_socAttrs.presentValue = (float)d->bat_soc;
 
-    /* ZCL 리포팅 */
+    /* ZCL 수동 리포팅 (EPEVER_MANUAL_REPORT) — 가입 상태에서만
+     * 표준 리포팅은 app_task() 의 report_handler() 가 담당 */
+#if EPEVER_MANUAL_REPORT
+    if (zb_isDeviceJoinedNwk())
     {
         static u32 s_last_report_tick = 0;
         u32 now = clock_time();
@@ -508,7 +525,7 @@ void epever_attrs_update(const epever_data_t *d)
 
             s_last_report_tick = now;
 
-            // printf("[ZCL] Report EP1-5 to coord\r\n");
+            // DBG_LOG("[ZCL] Report EP1-5 to coord\r\n");
 
             epInfo_t dstEp;
             TL_SETSTRUCTCONTENT(dstEp, 0);
@@ -611,4 +628,5 @@ void epever_attrs_update(const epever_data_t *d)
                        (u8*)&g_epever_socAttrs.presentValue);
         }
     }
+#endif /* EPEVER_MANUAL_REPORT */
 }

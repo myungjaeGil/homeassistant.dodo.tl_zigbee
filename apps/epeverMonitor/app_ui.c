@@ -44,19 +44,19 @@ void app_key_handler(void)
 
         if (!s_btn_confirmed && held_ms >= BUTTON_DEBOUNCE_MS) {
             s_btn_confirmed = TRUE;
-            printf("[BTN] pressed\r\n");
+            DBG_LOG("[BTN] pressed\r\n");
         }
 
         if (!s_btn_long_handled && held_ms >= BUTTON_LONG_PRESS_MS) {
             s_btn_long_handled = TRUE;
-            printf("[BTN] long press %d ms -> factory reset\r\n", (int)held_ms);
+            DBG_LOG("[BTN] long press %d ms -> factory reset\r\n", (int)held_ms);
             led_power_set_state(LED_PWR_STATE_RESET);
             zb_factoryReset();
         }
 
     } else if (!pressed && s_btn_pressed) {
         if (s_btn_confirmed) {
-            printf("[BTN] released after %d ms\r\n",
+            DBG_LOG("[BTN] released after %d ms\r\n",
                    (int)((clock_time() - s_btn_press_start)
                          / CLOCK_16M_SYS_TIMER_CLK_1MS));
         }
@@ -73,7 +73,7 @@ void localPermitJoinState(void)
 
     if (permit != s_permit) {
         s_permit = permit;
-        printf("[NWK] permit join %s\r\n", permit ? "OPEN" : "CLOSED");
+        DBG_LOG("[NWK] permit join %s\r\n", permit ? "OPEN" : "CLOSED");
         led_power_set_permit(permit);
     }
 }

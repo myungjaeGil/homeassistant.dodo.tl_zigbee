@@ -236,6 +236,10 @@ typedef struct {
 
 extern epever_cfgAttr_t g_epever_cfgAttrs;
 
+/* poll_interval 속성 변경 감지 → 범위 보정, 폴링 주기 반영, NV 저장. 변경 시 TRUE
+ *   ZCL Write 수신 직후 + app_task 500ms 주기로 호출 */
+bool epever_cfg_check(void);
+
 /*--------------------------------------------------------------------
  * 속성 초기화 / 업데이트
  *------------------------------------------------------------------*/
