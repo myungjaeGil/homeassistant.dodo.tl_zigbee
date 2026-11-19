@@ -104,13 +104,23 @@ static void juntek_zclWriteReqCmd(u8 ep, u16 clusterId, zclWriteCmd_t *pWriteReq
     u8 numAttr = pWriteReqCmd->numAttr;
     zclWriteRec_t *attr = pWriteReqCmd->attrList;
 
+    (void)ep;
+
+    /* [수정] 필터 설정(0xFF00 클러스터) — 전역 Write 는 클러스터 콜백(filter_cfg_writeCb)을
+     * 부르지 않으므로 기존에는 NV 에 저장되지 않아 재부팅하면 기본값으로 돌아갔음.
+     * 스택이 속성을 쓴 뒤 이 경로가 호출되므로 여기서 값 변화를 확인해 저장 */
+    if (clusterId == ZCL_CLUSTER_JUNTEK_FILTER) {
+        juntek_filter_cfg_check();
+        return;
+    }
+
     if (clusterId == ZCL_CLUSTER_GEN_BASIC) {
         for (u8 i = 0; i < numAttr; i++) {
             if (attr[i].attrID == ZCL_ATTRID_SOFT_RESET) {
                 /* 0xFF00 에 1 쓰면 소프트 리셋
                  * Write 응답 전송 후 200ms 뒤 reboot */
                 if (attr[i].attrData && attr[i].attrData[0] == 0x01) {
-                    printf("ZCL: soft reset requested\r\n");
+                    DBG_LOG("ZCL: soft reset requested\r\n");
                     light_blink_start(3, 100, 100);
                     TL_ZB_TIMER_SCHEDULE(soft_reset_timer_cb, NULL, 700);
                 }
@@ -142,8 +152,14 @@ static void juntek_zclReportCmd(zclReportCmd_t *pReportCmd)
 
 /*====================================================================
  * OTA 콜백 구현
- *  ZCL_OTA_SUPPORT 1 로 활성화됨.
- *  OTA 업그레이드 상태를 LED로 표시하고, 완료 시 자동 재부팅.
+ *  ZCL_OTA_SUPPORT 1 로 활성화됨. OTA 진행 중 LED 빠른 점멸.
+ *
+ * [수정] 완료(성공) 시 여기서 바로 SOFT_REBOOT 하던 것을 제거.
+ *  이 콜백은 이미지 검증 직후, Upgrade End Request 를 보내기 전에 호출됨.
+ *  SDK 는 서버의 Upgrade End Response 를 받은 뒤 ota_mcuReboot() 에서
+ *  새 이미지 부팅 플래그를 쓰고 재부팅하는데, 여기서 먼저 재부팅하면
+ *  플래그가 안 써져 이전 펌웨어로 다시 부팅됨(Z2M 에는 타임아웃/실패로 보임).
+ *  재부팅은 SDK 에 맡긴다.
  *==================================================================*/
 #if ZCL_OTA_SUPPORT
 ota_callBack_t juntek_otaCb = {
@@ -153,17 +169,14 @@ ota_callBack_t juntek_otaCb = {
 void bms_otaProcessMsgHandler(u8 evt, u8 status)
 {
     if (evt == OTA_EVT_START) {
-        /* OTA 시작: LED 빠른 깜빡임 */
-        light_blink_start(0xFF, 100, 100);   /* 0xFF=무한 반복 */
+        /* OTA 시작: LED 빠른 깜빡임
+         * [수정] 0xFF 는 255회(약 51초) 뒤 멈춤 → 0 = 정지할 때까지 무한 */
+        DBG_LOG("[OTA] Start\r\n");
+        light_blink_start(0, 100, 100);
     } else if (evt == OTA_EVT_COMPLETE) {
-        if (status == ZCL_STA_SUCCESS) {
-            /* 성공: 재부팅 */
-            light_blink_stop();
-            SOFT_REBOOT();
-        } else {
-            /* 실패: 깜빡임 중단 */
-            light_blink_stop();
-        }
+        DBG_LOG("[OTA] Complete status=%d\r\n", (int)status);
+        /* 성공이면 SDK 가 Upgrade End Response 후 재부팅함 */
+        light_blink_stop();
     }
 }
 #endif
@@ -216,7 +229,9 @@ void juntek_zclIdentifyCmdHandler(u8 endpoint, u16 srcAddr, u16 identifyTime)
         light_blink_stop();
     } else {
         if (!identifyTimerEvt) {
-            light_blink_start(identifyTime, 500, 500);
+            /* [수정] 횟수 대신 0(무한) — 종료는 identify 타이머가 light_blink_stop() 으로 처리
+             * (PWM5CH 와 동일: identifyTime 이 255 를 넘으면 u8 로 잘리던 문제도 해결) */
+            light_blink_start(0, 500, 500);
             identifyTimerEvt = TL_ZB_TIMER_SCHEDULE(juntek_zclIdentifyTimerCb,
                                                      NULL, 1000);
         }

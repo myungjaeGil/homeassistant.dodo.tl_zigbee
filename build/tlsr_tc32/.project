@@ -141,6 +141,11 @@
 			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/pwm5ch</location>
 		</link>
 		<link>
+			<name>apps/xmasTree</name>
+			<type>2</type>
+			<location>D:/workspace/homeassistant.dodo.tl_zigbee/apps/xmasTree</location>
+		</link>
+		<link>
 			<name>platform/boot</name>
 			<type>2</type>
 			<locationURI>virtual:/virtual</locationURI>

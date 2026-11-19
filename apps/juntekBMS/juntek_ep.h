@@ -47,6 +47,10 @@
 #ifndef ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE
 #define ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE             0x0505
 #endif
+/* [추가] DC 전류 (INT16, 부호 있음: 충전 +, 방전 -) — ZCL Electrical Measurement 0x0103 */
+#ifndef ZCL_ATTRID_ELECTRICAL_MEAS_DC_CURRENT
+#define ZCL_ATTRID_ELECTRICAL_MEAS_DC_CURRENT              0x0103
+#endif
 #ifndef ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT
 #define ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT             0x0508
 #endif
@@ -176,8 +180,55 @@
 
 #define ZCL_FILTER_ATTR_NUM             10
 
+/*--------------------------------------------------------------------
+ * [추가] RS485 통신 상태 — 같은 클러스터(EP1, 0xFF00), 읽기/리포트 전용
+ *  0xFF10 status  ENUM8  : 0=정상 / 1=수신 없음(타임아웃) / 2=파싱 오류 반복
+ *  0xFF11 rxAge   UINT16 : 마지막 정상 :r50 프레임 이후 경과 초 (최대 65535)
+ *  0xFF12 errCnt  UINT16 : 부팅 후 누적 파싱 오류 수 (최대 65535)
+ *  상태가 바뀌면 즉시, 정상일 때 60초 / 비정상일 때 10초마다 코디네이터로 보고
+ *------------------------------------------------------------------*/
+#define ZCL_ATTRID_RS485_STATUS         0xFF10
+#define ZCL_ATTRID_RS485_RX_AGE         0xFF11
+#define ZCL_ATTRID_RS485_ERR_CNT        0xFF12
+
+#define RS485_STATUS_OK                 0
+#define RS485_STATUS_TIMEOUT            1
+#define RS485_STATUS_PARSE_ERROR        2
+
+typedef struct {
+    u8  status;     /* RS485_STATUS_* */
+    u16 rxAge;      /* 초 */
+    u16 errCnt;     /* 누적 파싱 오류 */
+} juntek_rs485Attr_t;
+
+extern juntek_rs485Attr_t g_juntek_rs485Attrs;
+
+/* 3개 속성을 코디네이터로 즉시 보고 (juntekEpCfg.c) */
+void juntek_rs485_report(void);
+/* 1초마다 호출 — 상태 판정 + 보고 (juntekMonitor.c, app_task 에서 호출) */
+void juntek_rs485_tick(void);
+
+/* 필터 설정 클러스터 (EP1, manufacturer-specific) — zcl_juntekCb.c 의 Write 경로에서도 사용 */
+#define ZCL_CLUSTER_JUNTEK_FILTER       0xFF00
+
 /* NV Item ID — NV_MODULE_APP 영역, APP 전용 아이템 */
 #define NV_ITEM_JUNTEK_FILTER_CFG       0x2D   /* NV_MODULE_APP 내 앱 전용 아이템 */
+#define NV_ITEM_JUNTEK_RELAY_STATE      0x2E   /* [추가] EP6/EP7 릴레이 상태 (재부팅 복원용) */
+
+/* [추가] 릴레이 상태 NV 저장 구조체 */
+#define JUNTEK_RELAY_NV_MAGIC           0xA5
+typedef struct {
+    u8 magic;       /* JUNTEK_RELAY_NV_MAGIC 이면 유효 */
+    u8 drvChg;      /* EP6 주행충전 : 1=ON  */
+    u8 chgCur;      /* EP7 충전전류 : 1=Half */
+    u8 rsv;
+} juntek_relay_nv_t;
+
+/* [추가] 릴레이 상태 NV 저장/복원 + 현재 상태 보고 */
+void juntek_relay_state_restore(void);
+void juntek_relay_state_save(void);
+void juntek_relay_report(u8 ep);
+void juntek_relay_report_all(void);
 
 /* 필터 설정 구조체 — NV에 저장되는 단위 */
 typedef struct {
@@ -197,6 +248,8 @@ extern juntek_filter_cfg_t g_juntek_filterCfg;
 
 void juntek_filter_cfg_load(void);
 void juntek_filter_cfg_save(void);
+/* [추가] Z2M Write 로 바뀐 필터 값 확인 → 검증 후 NV 저장 (Write 경로 + app_task 500ms 에서 호출) */
+void juntek_filter_cfg_check(void);
 
 /*--------------------------------------------------------------------
  * ZCL Basic / Identify attribute type definition
@@ -234,6 +287,7 @@ typedef struct {
     u16  measuredVoltage;      /* 0x0505: ÷100 = V (UINT16, ZCL 스펙) */
     u16  measuredCurrent;      /* 0x0508: ÷100 = A (UINT16, 절댓값, ZCL 스펙) */
     s16  activePower;          /* 0x050B: W (INT16, 방향성 있음, ZCL 스펙) */
+    s16  dcCurrent;            /* 0x0103: ÷100 = A (INT16, 충전 +, 방전 -) [추가] */
     u16  acVoltageMultiplier;  /* 0x0600 */
     u16  acVoltageDivisor;     /* 0x0601 */
     u16  acCurrentMultiplier;  /* 0x0602 */

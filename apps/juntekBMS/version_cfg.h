@@ -55,7 +55,7 @@
 #endif
 
 #define APP_RELEASE                     0x10//app release 1.0
-#define APP_BUILD                       0x01//app build 01
+#define APP_BUILD                       0x04//app build 04 (RS485 통신 상태 0xFF10~0xFF12 추가) — OTA 시 이전보다 커야 함
 #define STACK_RELEASE                   0x30//stack release 3.0
 #define STACK_BUILD                     0x01//stack build 01
 
@@ -64,7 +64,10 @@
  * Refer to ZCL OTA specification for details.
  */
 #define MANUFACTURER_CODE_TELINK        0x1141//Telink ID
-#define	IMAGE_TYPE                      ((CHIP_TYPE << 8) | IMAGE_TYPE_LIGHT)
+/* [수정] JUNTEK 모니터 전용 이미지 타입 — PWM5CH(IMAGE_TYPE_LIGHT)·EPever(0x45)·Heater(0x48) 와
+ * 겹치지 않게 해서 다른 장치용 OTA 파일이 올라가지 않도록 함 */
+#define IMAGE_TYPE_JUNTEK               0x4A    /* 'J' */
+#define	IMAGE_TYPE                      ((CHIP_TYPE << 8) | IMAGE_TYPE_JUNTEK)
 #define	FILE_VERSION                    ((APP_RELEASE << 24) | (APP_BUILD << 16) | (STACK_RELEASE << 8) | STACK_BUILD)
 
 /* Pre-compiled link configuration. */

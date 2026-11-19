@@ -88,12 +88,26 @@ bdb_commissionSetting_t g_bdbCommissionSetting = {
 /**********************************************************************
  * UART RX
  */
+/* [수정] 128 → 256 : :r50 한 줄(70~100B)이 두 줄 연속 들어와도 DMA 한 번에 수용
+ *        (기존 124B 초과 시 len 검사에서 묶음 전체가 버려졌음). 16 의 배수 유지 */
 #ifndef UART_BUF_SIZE
-#define UART_BUF_SIZE   128     /* 4(DMA 헤더) + 124(데이터), 4의 배수 */
+#define UART_BUF_SIZE   256     /* 4(DMA 길이 헤더) + 252(데이터) */
 #endif
 
 volatile u8  uart_rx_buf[UART_BUF_SIZE] __attribute__((aligned(4))) = {0};
-volatile u8  uart_rx_flag = 0;
+
+/* [추가] 수신 링버퍼 — IRQ 에서 DMA 버퍼 내용을 즉시 복사
+ *  기존: IRQ 는 플래그만 세우고 메인 루프에서 DMA 버퍼를 읽음 → 메인 루프가
+ *        Zigbee 처리로 늦어지면 다음 패킷이 같은 DMA 버퍼를 덮어써 데이터 손상.
+ *  변경: IRQ 에서 링버퍼로 복사 + DMA 재설정, 메인 루프는 링버퍼만 소비.
+ *  head 는 IRQ 만, tail 은 메인 루프만 갱신 (단일 생산자/단일 소비자) */
+#define RX_RING_SIZE    512     /* 2 의 거듭제곱 */
+#define RX_RING_MASK    (RX_RING_SIZE - 1)
+
+static volatile u8  s_rx_ring[RX_RING_SIZE];
+static volatile u16 s_rx_head = 0;
+static volatile u16 s_rx_tail = 0;
+static volatile u8  s_rx_overflow = 0;
 
 extern drv_uart_t myUartDriver;
 
@@ -213,7 +227,7 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
 
     out->valid = true;
 
-    printf("BMS V=%d.%02d A=%c%d.%02d Ah=%d.%03d T=%d C relay=%s elapsed=%dmin\r\n",
+    DBG_LOG("BMS V=%d.%02d A=%c%d.%02d Ah=%d.%03d T=%d C relay=%s elapsed=%dmin\r\n",
            (int)out->voltage, (int)(out->voltage * 100) % 100,
            out->current < 0 ? '-' : '+',
            (int)(out->current < 0 ? -out->current : out->current),
@@ -246,6 +260,12 @@ static void juntek_parse_r50(const char *line, juntek_data_t *out)
  **********************************************************************/
 
 #define BMS_FILTER_N    4   /* 이동평균 샘플 수 */
+
+/* [추가] 연속 spike 허용 횟수
+ *  기존: spike 로 거부되면 last 가 갱신되지 않아, 부하가 실제로 크게 바뀐 경우
+ *  (예: 인버터 ON 으로 0A → -150A) 이후 모든 샘플이 영구히 거부되어 값이 멈췄음.
+ *  spike 가 연속 N 회 들어오면 실제 변화로 보고 필터를 새 값으로 다시 시작 */
+#define BMS_SPIKE_ACCEPT_N  3
 
 /* 샘플 주기 ~0.5초 기준 rate limit은 g_juntek_filterCfg에서 참조 */
 
@@ -285,37 +305,52 @@ static bool bms_filter_apply(juntek_data_t *d)
 
     /* --- 1단계: 범위 검사 --- */
     if (d->voltage < c->volt_min || d->voltage > c->volt_max) {
-        printf("BMS filter REJECT: V out of range %d.%02d\r\n",
+        DBG_LOG("BMS filter REJECT: V out of range %d.%02d\r\n",
                (int)d->voltage, (int)(d->voltage * 100) % 100);
         return false;
     }
     if (d->current < c->curr_min || d->current > c->curr_max) {
-        printf("BMS filter REJECT: A out of range\r\n");
+        DBG_LOG("BMS filter REJECT: A out of range\r\n");
         return false;
     }
     if (d->temperature < c->temp_min || d->temperature > c->temp_max) {
-        printf("BMS filter REJECT: T out of range\r\n");
+        DBG_LOG("BMS filter REJECT: T out of range\r\n");
         return false;
     }
     if (d->remain_ah < 0.0f || d->remain_ah > c->ah_max) {
-        printf("BMS filter REJECT: Ah out of range\r\n");
+        DBG_LOG("BMS filter REJECT: Ah out of range\r\n");
         return false;
     }
 
     /* --- 2단계: Rate Limit --- */
     if (f_voltage.initialized) {
+        static u8 s_spikeCnt = 0;
+        bool spike = false;
+
         if (bms_fabsf(d->voltage - f_voltage.last) > c->volt_rate) {
-            printf("BMS filter REJECT: V spike\r\n");
-            return false;
+            DBG_LOG("BMS filter REJECT: V spike\r\n");
+            spike = true;
+        } else if (bms_fabsf(d->current - f_current.last) > c->curr_rate) {
+            DBG_LOG("BMS filter REJECT: A spike\r\n");
+            spike = true;
+        } else if (bms_fabsf(d->temperature - f_temperature.last) > c->temp_rate) {
+            DBG_LOG("BMS filter REJECT: T spike\r\n");
+            spike = true;
         }
-        if (bms_fabsf(d->current - f_current.last) > c->curr_rate) {
-            printf("BMS filter REJECT: A spike\r\n");
-            return false;
+
+        if (spike) {
+            if (++s_spikeCnt < BMS_SPIKE_ACCEPT_N) {
+                return false;
+            }
+            /* 연속으로 범위 안의 '튄 값'이 계속 들어옴 → 실제 변화로 판단, 필터 재시작 */
+            DBG_LOG("BMS filter: %d consecutive spikes -> accept, reset filter\r\n",
+                    BMS_SPIKE_ACCEPT_N);
+            memset(&f_voltage,     0, sizeof(f_voltage));
+            memset(&f_current,     0, sizeof(f_current));
+            memset(&f_temperature, 0, sizeof(f_temperature));
+            memset(&f_remain_ah,   0, sizeof(f_remain_ah));
         }
-        if (bms_fabsf(d->temperature - f_temperature.last) > c->temp_rate) {
-            printf("BMS filter REJECT: T spike\r\n");
-            return false;
-        }
+        s_spikeCnt = 0;
     }
 
     /* --- 3단계: 이동평균 --- */
@@ -339,6 +374,83 @@ static bool bms_filter_apply(juntek_data_t *d)
 }
 
 /**********************************************************************
+ * [추가] RS485 통신 상태 판정
+ *
+ *  - 정상(OK)        : 마지막 정상 :r50 프레임 이후 RS485_TIMEOUT_SEC 미만
+ *  - 파싱 오류        : 정상 프레임은 끊겼는데 데이터(바이트)는 계속 들어오고,
+ *                      :r50 줄 파싱 실패가 RS485_PARSE_ERR_N 회 이상 연속
+ *                      (배선 노이즈, 보레이트 불일치, 줄 잘림 등)
+ *  - 수신 없음(TIMEOUT): 그 외 — RS485 로 아무것도 안 들어옴 (단선, BMS 꺼짐 등)
+ *
+ *  '정상 프레임' = 파싱 성공 기준. 필터(범위/튐)에서 거부된 값도 통신 자체는 정상이므로 포함.
+ *  경과 시간은 1초 타이머로 직접 셈 (clock_time() 차이는 16MHz 에서 약 268초마다 넘쳐 사용 불가)
+ **********************************************************************/
+#define RS485_TIMEOUT_SEC       5     /* BMS 는 약 0.5초마다 송신 → 5초면 10프레임 누락 */
+#define RS485_PARSE_ERR_N       3     /* 연속 파싱 실패 기준 */
+#define RS485_REPORT_OK_SEC     60    /* 정상일 때 주기 보고 */
+#define RS485_REPORT_BAD_SEC    10    /* 비정상일 때 주기 보고 (경과 시간 갱신용) */
+
+static u16 s_rsOkAgeSec   = 0;   /* 마지막 정상 프레임 이후 초 */
+static u16 s_rsRxIdleSec  = 0;   /* 마지막 수신 바이트 이후 초 */
+static u8  s_rsConsecErr  = 0;   /* 마지막 정상 프레임 이후 연속 파싱 실패 */
+
+static void rs485_on_frame_ok(void)
+{
+    s_rsOkAgeSec  = 0;
+    s_rsConsecErr = 0;
+}
+
+static void rs485_on_parse_error(void)
+{
+    if (g_juntek_rs485Attrs.errCnt < 0xFFFF) g_juntek_rs485Attrs.errCnt++;
+    if (s_rsConsecErr < 0xFF) s_rsConsecErr++;
+}
+
+/* 줄 안에 "r50" 이 있으면 :r50 응답으로 봄 (다른 명령 줄은 오류로 세지 않음) */
+static bool line_is_r50(const char *s)
+{
+    for (; s[0] && s[1] && s[2]; s++) {
+        if (s[0] == 'r' && s[1] == '5' && s[2] == '0') return TRUE;
+    }
+    return FALSE;
+}
+
+/* app_task 에서 1초마다 호출 */
+void juntek_rs485_tick(void)
+{
+    static u16 s_reportElapsed = 0;
+
+    if (s_rsOkAgeSec  < 0xFFFF) s_rsOkAgeSec++;
+    if (s_rsRxIdleSec < 0xFFFF) s_rsRxIdleSec++;
+
+    u8 st;
+    if (s_rsOkAgeSec < RS485_TIMEOUT_SEC) {
+        st = RS485_STATUS_OK;
+    } else if (s_rsRxIdleSec < RS485_TIMEOUT_SEC && s_rsConsecErr >= RS485_PARSE_ERR_N) {
+        st = RS485_STATUS_PARSE_ERROR;
+    } else {
+        st = RS485_STATUS_TIMEOUT;
+    }
+
+    u8 prev = g_juntek_rs485Attrs.status;
+    g_juntek_rs485Attrs.status = st;
+    g_juntek_rs485Attrs.rxAge  = s_rsOkAgeSec;
+
+    s_reportElapsed++;
+    u16 period = (st == RS485_STATUS_OK) ? RS485_REPORT_OK_SEC : RS485_REPORT_BAD_SEC;
+
+    if (st != prev) {
+        DBG_LOG("RS485 status %d -> %d (age=%ds, err=%d)\r\n",
+                prev, st, s_rsOkAgeSec, g_juntek_rs485Attrs.errCnt);
+        s_reportElapsed = 0;
+        juntek_rs485_report();
+    } else if (s_reportElapsed >= period) {
+        s_reportElapsed = 0;
+        juntek_rs485_report();
+    }
+}
+
+/**********************************************************************
  * juntek_r50_process — 파싱 완료 후 처리 콜백
  **********************************************************************/
 static void juntek_r50_process(const juntek_data_t *d)
@@ -354,55 +466,70 @@ static void juntek_r50_process(const juntek_data_t *d)
 }
 
 /**********************************************************************
- * uart_rx_cb — IRQ 컨텍스트 (최소 작업만)
+ * uart_rx_cb — IRQ 컨텍스트
+ * [수정] DMA 버퍼 → 링버퍼 복사 후 DMA 재설정 (메인 루프 지연과 무관하게 데이터 보존)
  **********************************************************************/
 _attribute_ram_code_ void uart_rx_cb(void)
 {
-    uart_rx_flag = 1;
+    u32 len = (u32)uart_rx_buf[0]
+            | ((u32)uart_rx_buf[1] << 8)
+            | ((u32)uart_rx_buf[2] << 16)
+            | ((u32)uart_rx_buf[3] << 24);
+
+    if (len > (UART_BUF_SIZE - 4)) {
+        len = UART_BUF_SIZE - 4;        /* 비정상 길이 — 버퍼 범위까지만 */
+        s_rx_overflow = 1;
+    }
+
+    u16 head = s_rx_head;
+    for (u32 i = 0; i < len; i++) {
+        u16 next = (head + 1) & RX_RING_MASK;
+        if (next == s_rx_tail) {        /* 링버퍼 가득 참 — 나머지 버림 */
+            s_rx_overflow = 1;
+            break;
+        }
+        s_rx_ring[head] = uart_rx_buf[4 + i];
+        head = next;
+    }
+    s_rx_head = head;
+
+    /* 길이 헤더 초기화 + DMA 재설정 (기존 uart_rx_poll() 의 재설정을 IRQ 로 이동) */
+    uart_rx_buf[0] = uart_rx_buf[1] = uart_rx_buf[2] = uart_rx_buf[3] = 0;
+    uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
 }
 
 /**********************************************************************
  * uart_rx_poll — app_task() 에서 매 루프 호출
  *
- * DMA 버퍼 → 라인 버퍼 조립 → \n 수신 시 파싱
+ * 링버퍼 → 라인 버퍼 조립 → \n 수신 시 파싱
  **********************************************************************/
 void uart_rx_poll(void)
 {
-//    if (uart_rx_flag) {
-//        printf("POLL: flag=%d\r\n", uart_rx_flag);
-//    }
-
-    if (!uart_rx_flag) return;
-    uart_rx_flag = 0;
-
-    u16  len  = (uart_rx_buf[1] << 8) | uart_rx_buf[0];
-    u8  *data = (u8 *)(uart_rx_buf + 4);
-
-//    printf("uart_rx_buf len=%d \r\n", len);
-
-    if (len == 0 || len > (UART_BUF_SIZE - 4)) {
-        uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
-        return;
+    if (s_rx_overflow) {
+        s_rx_overflow = 0;
+        s_line_pos = 0;                 /* 잘린 줄은 버리고 다음 줄부터 */
+        rs485_on_parse_error();         /* [추가] 잘린 줄 = 프레임 손실 */
+        DBG_LOG("UART RX overflow -> line reset\r\n");
     }
 
-    /* 바이트 단위로 라인 버퍼에 조립 */
-    u16 i;
-    for (i = 0; i < len; i++) {
-        char c = (char)data[i];
-//        printf("%c", c);
+    while (s_rx_tail != s_rx_head) {
+        char c = (char)s_rx_ring[s_rx_tail];
+        s_rx_tail = (s_rx_tail + 1) & RX_RING_MASK;
+        s_rsRxIdleSec = 0;              /* [추가] 바이트 수신 = 선로는 살아 있음 */
 
         if (c == '\n' || c == '\r') {
             if (s_line_pos > 0) {
                 s_line_buf[s_line_pos] = '\0';
-
-                //printf("BMS RX: %s\r\n", s_line_buf);
 
                 /* :r50 파싱 */
                 juntek_data_t d = {0};
                 juntek_parse_r50(s_line_buf, &d);
 
                 if (d.valid) {
+                    rs485_on_frame_ok();        /* [추가] RS485 정상 */
                     juntek_r50_process(&d);
+                } else if (line_is_r50(s_line_buf)) {
+                    rs485_on_parse_error();     /* [추가] :r50 줄인데 파싱 실패 */
                 }
 
                 s_line_pos = 0;
@@ -411,15 +538,12 @@ void uart_rx_poll(void)
             if (s_line_pos < LINE_BUF_SIZE - 1) {
                 s_line_buf[s_line_pos++] = c;
             } else {
-                /* 버퍼 오버플로 — 리셋 */
+                /* 라인 버퍼 오버플로 — 리셋 */
                 s_line_pos = 0;
+                rs485_on_parse_error();         /* [추가] 줄바꿈 없이 너무 긴 데이터 = 깨진 데이터 */
             }
         }
     }
-//    printf("\r\n");
-
-    /* DMA 재시작 */
-    uart_recbuff_init((u8 *)uart_rx_buf, UART_BUF_SIZE);
 }
 
 /**********************************************************************
@@ -438,7 +562,7 @@ void uart_rx_init(void)
 
     myUartDriver.recvCb = uart_rx_cb;
 
-    printf("uart_rx_init done\r\n");
+    DBG_LOG("uart_rx_init done\r\n");
 }
 
 /**********************************************************************
@@ -504,9 +628,24 @@ void user_app_init(void)
  **********************************************************************/
 void app_task(void)
 {
+    static u32 s_cfgCheckTick = 0;
+    static u32 s_rsTick = 0;            /* [추가] RS485 상태 1초 타이머 */
+
     uart_rx_poll();
     app_key_handler();
     localPermitJoinState();
+
+    /* [추가] 필터 설정 변경 감시 (Write 경로를 거치지 않은 변경 대비, 500ms 주기) */
+    if (clock_time_exceed(s_cfgCheckTick, 500 * 1000)) {
+        s_cfgCheckTick = clock_time();
+        juntek_filter_cfg_check();
+    }
+
+    /* [추가] RS485 통신 상태 판정 + 보고 (1초 주기) */
+    if (clock_time_exceed(s_rsTick, 1000 * 1000)) {
+        s_rsTick = clock_time();
+        juntek_rs485_tick();
+    }
 
     if (BDB_STATE_GET() == BDB_STATE_IDLE) {
         report_handler();
@@ -533,7 +672,7 @@ void user_init(bool isRetention)
     /* UART RX 초기화 */
     uart_rx_init();
 
-    printf("user_init start\r\n");
+    DBG_LOG("user_init start\r\n");
 
     /* LED + 버튼 초기화 */
     juntek_hw_init();
@@ -573,9 +712,10 @@ void user_init(bool isRetention)
              &juntek_otaInfo, &juntek_otaCb);
 #endif
 
-    /* EP1~EP5 리포팅 설정 — bdb_init() 이후에 호출해야 NV에 정상 저장됨 */
+    /* EP1~EP7 리포팅 설정 — bdb_init() 이후에 호출해야 NV에 정상 저장됨 */
     {
-        u8 reportableChange2[2] = {0x00, 0x01};  /* INT16 변화량 1 단위 */
+        /* [수정] {0x00,0x01} 은 little-endian 으로 256 → 전압 2.56V 이상 바뀌어야 리포트됐음 */
+        u8 reportableChange2[2] = {0x01, 0x00};  /* INT16/UINT16 변화량 1 단위 (LE) */
         u8 reportableChange1[1] = {0x01};         /* BOOLEAN 변화량 1 단위 */
         u8 reportableChange6[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00}; /* UINT48 변화량 1 단위 */
         u8 reportableChangeF[4] = {0x00, 0x00, 0x80, 0x3F}; /* float 1.0f (IEEE754 LE) */
@@ -589,6 +729,12 @@ void user_init(bool isRetention)
         bdb_defaultReportingCfg(JUNTEK_ENDPOINT_ELEC, HA_PROFILE_ID,
             ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
             ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,
+            5, 300, (u8*)reportableChange2);
+
+        /* [추가] 부호 있는 DC 전류 (INT16, 0.01A) */
+        bdb_defaultReportingCfg(JUNTEK_ENDPOINT_ELEC, HA_PROFILE_ID,
+            ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+            ZCL_ATTRID_ELECTRICAL_MEAS_DC_CURRENT,
             5, 300, (u8*)reportableChange2);
 
         bdb_defaultReportingCfg(JUNTEK_ENDPOINT_ELEC, HA_PROFILE_ID,
@@ -619,5 +765,14 @@ void user_init(bool isRetention)
             ZCL_CLUSTER_GEN_ANALOG_INPUT_BASIC,
             ZCL_ATTRID_ANALOG_INPUT_PRESENT_VALUE,
             30, 600, (u8*)reportableChangeF);
+
+        /* [추가] EP6/EP7: 릴레이 OnOff (BOOLEAN) — Z2M configure 전에도 주기 보고 */
+        bdb_defaultReportingCfg(JUNTEK_ENDPOINT_DRVCHG, HA_PROFILE_ID,
+            ZCL_CLUSTER_GEN_ON_OFF, ZCL_ATTRID_ONOFF,
+            1, 300, (u8*)reportableChange1);
+
+        bdb_defaultReportingCfg(JUNTEK_ENDPOINT_CHGCUR, HA_PROFILE_ID,
+            ZCL_CLUSTER_GEN_ON_OFF, ZCL_ATTRID_ONOFF,
+            1, 300, (u8*)reportableChange1);
     }
 }

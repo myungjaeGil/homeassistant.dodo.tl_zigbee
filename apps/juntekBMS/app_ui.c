@@ -59,7 +59,7 @@ void app_key_handler(void)
         if (!s_btn_long_handled && held_ms >= BUTTON_LONG_PRESS_MS) {
             /* 5초 이상: Factory Reset */
             s_btn_long_handled = TRUE;
-            printf("Button1 long press: factory reset\r\n");
+            DBG_LOG("Button1 long press: factory reset\r\n");
             led_power_set_state(LED_PWR_STATE_RESET);
             zb_factoryReset();
         }

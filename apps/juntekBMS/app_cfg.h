@@ -42,11 +42,34 @@ extern "C" {
 #define DEBUG_BAUDRATE              			1000000//1M
 #define USB_PRINTF_MODE                         0
 
+/*--------------------------------------------------------------------------
+ * 디버그 로그 (PWM5CH/EPever 와 동일)
+ *   1: DBG_LOG → printf (PD7 soft-UART 1Mbps)
+ *   0: DBG_LOG 비활성 (릴리즈 빌드 — PD7 출력이 없어져 옆 핀 PD2(주행충전 릴레이)
+ *      쪽 간섭도 줄어듦)
+ *------------------------------------------------------------------------*/
+#define DEBUG_ENABLE                            1
+
+#if DEBUG_ENABLE
+    #define DBG_LOG(...)    printf(__VA_ARGS__)
+#else
+    #define DBG_LOG(...)    do{}while(0)
+#endif
+
+/*--------------------------------------------------------------------------
+ * 수동 리포트 (juntek_attrs_update 에서 5초마다 EP1~EP5 7개 속성을 코디네이터로 직접 전송)
+ *   1: 사용 — Z2M 바인딩/리포팅 설정이 없어도 값이 전달됨 (기존 동작)
+ *   0: 미사용 — 표준 ZCL 리포팅(report_handler)만 사용.
+ *      Z2M 에서 Reconfigure 로 configureReporting 이 들어간 뒤라면 0 으로 두면
+ *      같은 값이 두 번 보고되지 않음
+ *------------------------------------------------------------------------*/
+#define JUNTEK_MANUAL_REPORT                    1
+
 /* HCI interface */
 #define	ZBHCI_UART                              0
 
 /* BDB */
-#define TOUCHLINK_SUPPORT                       1
+#define TOUCHLINK_SUPPORT                       0   /* [수정] 1→0: 라우터 장치에 터치링크 불필요 (PWM5CH 와 동일) */
 #define FIND_AND_BIND_SUPPORT                   0
 
 /* IR 수신 기능 — juntekBMS는 미사용 (irq_handler.c 가드용) */
@@ -70,8 +93,11 @@ extern "C" {
  */
 #define FLASH_PROTECT_ENABLE                    0
 
-/* Watch dog module */
-#define MODULE_WATCHDOG_ENABLE                  0
+/* Watch dog module
+ * [수정] 0→1 : 릴레이(주행충전/충전전류) 제어 장치이므로 펌웨어 정지 시 자동 재부팅.
+ *  재부팅 후 릴레이 상태는 NV 에서 복원됨(juntek_relay_state_restore).
+ *  ※ SDK main.c 의 wd_start()/WD_CLEAR() 가 이 매크로로 활성화되는지 확인 */
+#define MODULE_WATCHDOG_ENABLE                  1
 
 /* UART module */
 #if ZBHCI_UART

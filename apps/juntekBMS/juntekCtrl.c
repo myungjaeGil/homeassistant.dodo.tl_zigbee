@@ -53,10 +53,16 @@ static void led_power_blink_stop(bool on)
     drv_gpio_write(LED_POWER, on ? 1 : 0);
 }
 
+static void led_power_restore_steady(void);
+
 void led_power_set_state(led_pwr_state_t state)
 {
     if (s_led_pwr_state == state) return;
     s_led_pwr_state = state;
+
+    /* [수정] Identify/OTA 점멸 중에는 상태만 기록하고, 점멸이 끝나면
+     * led_power_restore_steady() 가 새 상태로 복원 (두 타이머가 같은 LED 를 동시에 토글하던 문제) */
+    if (gJuntekCtx.timerLedEvt) return;
 
     switch (state) {
     case LED_PWR_STATE_BOOT:
@@ -100,12 +106,12 @@ void relay_drvchg_init(void)
     drv_gpio_output_en(RELAY_DRV_CHG, 1);
     drv_gpio_input_en(RELAY_DRV_CHG, 0);
     drv_gpio_write(RELAY_DRV_CHG, 0);   /* 초기 OFF */
-    printf("[relay_drvchg_init] PD2 GPIO output configured\r\n");
+    DBG_LOG("[relay_drvchg_init] PD2 GPIO output configured\r\n");
 }
 
 void relay_drvchg_set(bool on)
 {
-    printf("[relay_drvchg_set] PD2 <= %d\r\n", on ? 1 : 0);
+    DBG_LOG("[relay_drvchg_set] PD2 <= %d\r\n", on ? 1 : 0);
     drv_gpio_write(RELAY_DRV_CHG, on ? 1 : 0);
 }
 
@@ -122,12 +128,12 @@ void relay_chgcur_init(void)
     drv_gpio_output_en(RELAY_CHG_CUR, 1);
     drv_gpio_input_en(RELAY_CHG_CUR, 0);
     drv_gpio_write(RELAY_CHG_CUR, 0);   /* 초기 Full(OFF) */
-    printf("[relay_chgcur_init] PC3 GPIO output configured\r\n");
+    DBG_LOG("[relay_chgcur_init] PC3 GPIO output configured\r\n");
 }
 
 void relay_chgcur_set(bool on)
 {
-    printf("[relay_chgcur_set] PC3 <= %d\r\n", on ? 1 : 0);
+    DBG_LOG("[relay_chgcur_set] PC3 <= %d\r\n", on ? 1 : 0);
     drv_gpio_write(RELAY_CHG_CUR, on ? 1 : 0);
 }
 
@@ -158,7 +164,7 @@ void sampleLight_onOffUpdate(u8 cmd)
     /* [디버그] 이 로그가 찍히면 SDK의 zcl_onoff.c가 EP별 cb 대신
      * 이 전역 함수를 직접 호출하고 있다는 뜻 — juntek_drvChgCb/
      * juntek_chgCurCb가 호출되지 않는 진짜 원인일 수 있음 */
-    printf("[sampleLight_onOffUpdate] HIT! cmd=0x%02x (전역 스텁이 호출됨)\r\n", cmd);
+    DBG_LOG("[sampleLight_onOffUpdate] HIT! cmd=0x%02x (전역 스텁이 호출됨)\r\n", cmd);
 }
 void light_refresh(u8 sta)        { (void)sta; }
 
@@ -232,18 +238,30 @@ static s32 blink_TimerEvtCb(void *arg)
     return interval;
 }
 
+/* times = 0 → light_blink_stop() 까지 무한 반복
+ * [수정]
+ *  - 미가입 점멸 타이머(s_led_pwr_tmr)를 먼저 멈춤 (기존: 두 타이머가 같은 LED 를 토글해 패턴이 깨짐)
+ *  - 이미 점멸 중이면 새 패턴으로 다시 시작 (기존: 무시 → Identify 중 OTA 시작 표시가 안 나옴)
+ *  - LED OFF 에서 시작해 첫 타이머에서 ON (PWM5CH/EPever 와 동일) */
 void light_blink_start(u8 times, u16 ledOnTime, u16 ledOffTime)
 {
-    if (!gJuntekCtx.timerLedEvt) {
-        gJuntekCtx.times      = times;
-        gJuntekCtx.ledOnTime  = ledOnTime;
-        gJuntekCtx.ledOffTime = ledOffTime;
-        gJuntekCtx.oriSta     = 0;
-        gJuntekCtx.sta        = 0;
-
-        gJuntekCtx.timerLedEvt =
-            TL_ZB_TIMER_SCHEDULE(blink_TimerEvtCb, NULL, ledOnTime);
+    if (s_led_pwr_tmr) {
+        TL_ZB_TIMER_CANCEL(&s_led_pwr_tmr);
+        s_led_pwr_tmr = NULL;
     }
+    if (gJuntekCtx.timerLedEvt) {
+        TL_ZB_TIMER_CANCEL(&gJuntekCtx.timerLedEvt);
+    }
+
+    gJuntekCtx.times      = times;
+    gJuntekCtx.ledOnTime  = ledOnTime;
+    gJuntekCtx.ledOffTime = ledOffTime;
+    gJuntekCtx.oriSta     = 0;
+    gJuntekCtx.sta        = 0;
+    drv_gpio_write(LED_POWER, 0);
+
+    gJuntekCtx.timerLedEvt =
+        TL_ZB_TIMER_SCHEDULE(blink_TimerEvtCb, NULL, ledOffTime);
 }
 
 void light_blink_stop(void)

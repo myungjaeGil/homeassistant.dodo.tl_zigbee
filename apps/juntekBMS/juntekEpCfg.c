@@ -164,8 +164,12 @@ juntek_filter_cfg_t g_juntek_filterCfg = {
     .temp_rate  = 2.0f,
 };
 
+/* 마지막으로 NV 에 저장된(또는 NV 에서 읽은) 값 — 변경 감지·복원용 */
+static juntek_filter_cfg_t s_filterSaved;
+
 void juntek_filter_cfg_save(void)
 {
+    memcpy(&s_filterSaved, &g_juntek_filterCfg, sizeof(juntek_filter_cfg_t));
     nv_sts_t st = nv_flashWriteNew(1, NV_MODULE_APP,
                                     NV_ITEM_JUNTEK_FILTER_CFG,
                                     sizeof(juntek_filter_cfg_t),
@@ -185,21 +189,64 @@ void juntek_filter_cfg_load(void)
                                    (u8*)&g_juntek_filterCfg);
     if (st != NV_SUCC) {
         juntek_filter_cfg_save();
-        //printf("filter cfg: defaults saved\r\n");
+        DBG_LOG("filter cfg: defaults saved\r\n");
     } else {
-        //printf("filter cfg: loaded from NV\r\n");
+        memcpy(&s_filterSaved, &g_juntek_filterCfg, sizeof(juntek_filter_cfg_t));
+        DBG_LOG("filter cfg: loaded from NV\r\n");
     }
 }
 
-/* ZCL write 콜백 — Z2M에서 write 시 NV 저장 */
-static status_t filter_cfg_writeCb(zclIncomingAddrInfo_t *pAddrInfo,
-                                    u8 cmdId, void *cmdPayload)
+/* float 유효성 — NaN/Inf 는 지수부가 전부 1 */
+static bool filter_val_ok(float f)
 {
-    (void)pAddrInfo; (void)cmdId; (void)cmdPayload;
-    juntek_filter_cfg_save();
-    //printf("filter cfg: saved\r\n");
-    return ZCL_STA_SUCCESS;
+    u32 bits;
+    memcpy(&bits, &f, 4);
+    return ((bits & 0x7F800000) != 0x7F800000);
 }
+
+static bool filter_cfg_valid(const juntek_filter_cfg_t *c)
+{
+    const float *f = (const float *)c;
+    u8 i;
+    for (i = 0; i < sizeof(juntek_filter_cfg_t) / sizeof(float); i++) {
+        if (!filter_val_ok(f[i])) return FALSE;
+    }
+    if (c->volt_min >= c->volt_max) return FALSE;
+    if (c->curr_min >= c->curr_max) return FALSE;
+    if (c->temp_min >= c->temp_max) return FALSE;
+    if (c->ah_max   <= 0.0f)        return FALSE;
+    if (c->volt_rate <= 0.0f || c->curr_rate <= 0.0f || c->temp_rate <= 0.0f) return FALSE;
+    return TRUE;
+}
+
+/* [추가] 필터 설정 변경 감시
+ *  Z2M 의 전역 Write Attributes 는 스택이 속성 메모리에 직접 쓰고 클러스터 콜백
+ *  (filter_cfg_writeCb)은 부르지 않으므로, 기존에는 값이 NV 에 저장되지 않았음.
+ *  ZCL_CMD_WRITE 경로와 app_task(500ms)에서 호출해 값이 바뀌었으면
+ *  유효성 검사 후 저장, 잘못된 값(NaN, min>=max, rate<=0)이면 이전 값으로 되돌림. */
+void juntek_filter_cfg_check(void)
+{
+    if (memcmp(&s_filterSaved, &g_juntek_filterCfg, sizeof(juntek_filter_cfg_t)) == 0) {
+        return;
+    }
+    if (filter_cfg_valid(&g_juntek_filterCfg)) {
+        juntek_filter_cfg_save();
+        DBG_LOG("filter cfg: changed -> saved\r\n");
+    } else {
+        memcpy(&g_juntek_filterCfg, &s_filterSaved, sizeof(juntek_filter_cfg_t));
+        DBG_LOG("filter cfg: invalid value -> restored\r\n");
+    }
+}
+
+/* [수정] 클러스터 콜백은 클러스터 전용 명령에만 호출되고 전역 Write 에는 호출되지 않음.
+ * 이 클러스터에는 전용 명령이 없으므로 콜백을 두지 않고 juntek_filter_cfg_check() 로 저장 */
+
+/* [추가] RS485 통신 상태 속성 값 (부팅 직후는 정상으로 시작, 5초 안에 프레임이 없으면 타임아웃) */
+juntek_rs485Attr_t g_juntek_rs485Attrs = {
+    .status = RS485_STATUS_OK,
+    .rxAge  = 0,
+    .errCnt = 0,
+};
 
 /* 필터 설정 속성 테이블 (EP1 추가 속성) */
 static const zclAttrInfo_t filter_attrTbl[] = {
@@ -213,11 +260,15 @@ static const zclAttrInfo_t filter_attrTbl[] = {
     { ZCL_ATTRID_FILTER_VOLT_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.volt_rate },
     { ZCL_ATTRID_FILTER_CURR_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.curr_rate },
     { ZCL_ATTRID_FILTER_TEMP_RATE,  ZCL_DATA_TYPE_SINGLE_PREC, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE, (u8*)&g_juntek_filterCfg.temp_rate },
+    /* [추가] RS485 통신 상태 — 읽기/리포트 전용 (값은 juntek_rs485_tick() 이 갱신) */
+    { ZCL_ATTRID_RS485_STATUS,      ZCL_DATA_TYPE_ENUM8,       ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_rs485Attrs.status  },
+    { ZCL_ATTRID_RS485_RX_AGE,      ZCL_DATA_TYPE_UINT16,      ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_rs485Attrs.rxAge   },
+    { ZCL_ATTRID_RS485_ERR_CNT,     ZCL_DATA_TYPE_UINT16,      ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_rs485Attrs.errCnt  },
 };
 #define ZCL_FILTER_ATTR_NUM_DEF  (sizeof(filter_attrTbl) / sizeof(zclAttrInfo_t))
 
 /* 필터 클러스터 등록 래퍼 — EP1에 별도 클러스터(0xFF00)로 등록 */
-#define ZCL_CLUSTER_JUNTEK_FILTER   0xFF00   /* manufacturer-specific cluster */
+/* ZCL_CLUSTER_JUNTEK_FILTER (0xFF00) 는 juntek_ep.h 로 이동 */
 
 static status_t filter_register(u8 ep, u16 manuCode, u8 attrNum,
                                  const zclAttrInfo_t *tbl, cluster_forAppCb_t cb)
@@ -235,6 +286,8 @@ static const zclAttrInfo_t elec_attrTbl[] = {
     { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,         ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredVoltage },
     { ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,         ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.measuredCurrent },
     { ZCL_ATTRID_ELECTRICAL_MEAS_ACTIVE_POWER,        ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.activePower },
+    /* [추가] 부호 있는 DC 전류 — 충/방전 방향을 전류 값 자체로 전달 (HA에서 방전 시 음수) */
+    { ZCL_ATTRID_ELECTRICAL_MEAS_DC_CURRENT,          ZCL_DATA_TYPE_INT16,    ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_elecAttrs.dcCurrent },
     { ZCL_ATTRID_ELECTRICAL_MEAS_AC_VOLT_MULTIPLIER,  ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ,                             (u8*)&g_juntek_elecAttrs.acVoltageMultiplier },
     { ZCL_ATTRID_ELECTRICAL_MEAS_AC_VOLT_DIVISOR,     ZCL_DATA_TYPE_UINT16,   ACCESS_CONTROL_READ,                             (u8*)&g_juntek_elecAttrs.acVoltageDivisor },
     { ZCL_ATTRID_ELECTRICAL_MEAS_AC_CURRENT_MULTIPLIER, ZCL_DATA_TYPE_UINT16, ACCESS_CONTROL_READ,                             (u8*)&g_juntek_elecAttrs.acCurrentMultiplier },
@@ -324,6 +377,116 @@ static const zclAttrInfo_t analog_attrTbl[] = {
 #define ZCL_ANALOG_ATTR_NUM  (sizeof(analog_attrTbl) / sizeof(zclAttrInfo_t))
 
 /*====================================================================
+ * [추가] EP6/EP7 릴레이 상태 — NV 저장/복원 + 보고
+ *
+ *  - onOff 속성은 READ | REPORTABLE (쓰기 불가, ZCL 스펙과 동일).
+ *    상태 변경은 On/Off/Toggle 명령으로만 → 항상 콜백을 거쳐 GPIO 와 일치.
+ *  - 명령으로 상태가 바뀔 때마다 NV 저장 → 재부팅/전원 순단 후 그대로 복원.
+ *  - 가입(또는 재부팅 후 기존 네트워크 복귀) 시 현재 상태를 코디네이터에 보고.
+ *==================================================================*/
+void juntek_relay_state_save(void)
+{
+    juntek_relay_nv_t nv;
+    nv.magic  = JUNTEK_RELAY_NV_MAGIC;
+    nv.drvChg = g_juntek_drvChgAttrs.onOff ? 1 : 0;
+    nv.chgCur = g_juntek_chgCurAttrs.onOff ? 1 : 0;
+    nv.rsv    = 0;
+
+    nv_sts_t st = nv_flashWriteNew(1, NV_MODULE_APP, NV_ITEM_JUNTEK_RELAY_STATE,
+                                   sizeof(nv), (u8 *)&nv);
+    DBG_LOG("relay nv: save drv=%d cur=%d st=%d\r\n", nv.drvChg, nv.chgCur, (int)st);
+    (void)st;
+}
+
+/* juntek_attrs_init() 에서 호출 — 저장된 상태를 속성 + GPIO 에 반영 */
+void juntek_relay_state_restore(void)
+{
+    juntek_relay_nv_t nv;
+    nv_sts_t st = nv_flashReadNew(1, NV_MODULE_APP, NV_ITEM_JUNTEK_RELAY_STATE,
+                                  sizeof(nv), (u8 *)&nv);
+
+    if (st == NV_SUCC && nv.magic == JUNTEK_RELAY_NV_MAGIC) {
+        g_juntek_drvChgAttrs.onOff = nv.drvChg ? 1 : 0;
+        g_juntek_chgCurAttrs.onOff = nv.chgCur ? 1 : 0;
+        DBG_LOG("relay nv: restored drv=%d cur=%d\r\n", nv.drvChg, nv.chgCur);
+    } else {
+        /* 최초 부팅(NV 없음) — 기본값 OFF/Full 로 저장 */
+        g_juntek_drvChgAttrs.onOff = 0;
+        g_juntek_chgCurAttrs.onOff = 0;
+        juntek_relay_state_save();
+        DBG_LOG("relay nv: none -> default OFF saved\r\n");
+    }
+
+    relay_drvchg_set(g_juntek_drvChgAttrs.onOff ? TRUE : FALSE);
+    relay_chgcur_set(g_juntek_chgCurAttrs.onOff ? TRUE : FALSE);
+}
+
+/* EP6/EP7 onOff 현재 값을 코디네이터로 즉시 보고 */
+void juntek_relay_report(u8 ep)
+{
+    u8 *pVal;
+
+    if (!zb_isDeviceJoinedNwk()) return;
+
+    if (ep == JUNTEK_ENDPOINT_DRVCHG)      pVal = &g_juntek_drvChgAttrs.onOff;
+    else if (ep == JUNTEK_ENDPOINT_CHGCUR) pVal = &g_juntek_chgCurAttrs.onOff;
+    else return;
+
+    epInfo_t dstEp;
+    TL_SETSTRUCTCONTENT(dstEp, 0);
+    dstEp.dstAddrMode       = APS_SHORT_DSTADDR_WITHEP;
+    dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
+    dstEp.dstEp             = 1;
+    dstEp.profileId         = HA_PROFILE_ID;
+
+    zcl_report(ep, &dstEp, TRUE, ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+               MANUFACTURER_CODE_NONE, ZCL_CLUSTER_GEN_ON_OFF,
+               ZCL_ATTRID_ONOFF, ZCL_DATA_TYPE_BOOLEAN, pVal);
+}
+
+void juntek_relay_report_all(void)
+{
+    juntek_relay_report(JUNTEK_ENDPOINT_DRVCHG);
+    juntek_relay_report(JUNTEK_ENDPOINT_CHGCUR);
+}
+
+/* [추가] RS485 통신 상태 3개 속성을 코디네이터로 즉시 보고 (EP1, 클러스터 0xFF00)
+ *  BMS 데이터 보고(juntek_attrs_update)는 :r50 이 들어올 때만 실행되므로
+ *  RS485 가 끊기면 아무것도 보고되지 않음 → 이 상태 보고는 별도 1초 타이머에서 보냄 */
+void juntek_rs485_report(void)
+{
+    if (!zb_isDeviceJoinedNwk()) return;
+
+    epInfo_t dstEp;
+    TL_SETSTRUCTCONTENT(dstEp, 0);
+    dstEp.dstAddrMode       = APS_SHORT_DSTADDR_WITHEP;
+    dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
+    dstEp.dstEp             = 1;
+    dstEp.profileId         = HA_PROFILE_ID;
+
+    zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE, ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+               MANUFACTURER_CODE_NONE, ZCL_CLUSTER_JUNTEK_FILTER,
+               ZCL_ATTRID_RS485_STATUS, ZCL_DATA_TYPE_ENUM8, (u8*)&g_juntek_rs485Attrs.status);
+    zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE, ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+               MANUFACTURER_CODE_NONE, ZCL_CLUSTER_JUNTEK_FILTER,
+               ZCL_ATTRID_RS485_RX_AGE, ZCL_DATA_TYPE_UINT16, (u8*)&g_juntek_rs485Attrs.rxAge);
+    zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE, ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+               MANUFACTURER_CODE_NONE, ZCL_CLUSTER_JUNTEK_FILTER,
+               ZCL_ATTRID_RS485_ERR_CNT, ZCL_DATA_TYPE_UINT16, (u8*)&g_juntek_rs485Attrs.errCnt);
+}
+
+/* 명령 → 새 상태 계산. 지원하지 않는 명령이면 FALSE */
+static bool onoff_cmd_to_state(u8 cmdId, u8 cur, bool *pOn)
+{
+    switch (cmdId) {
+    case ZCL_CMD_ONOFF_ON:     *pOn = TRUE;               return TRUE;
+    case ZCL_CMD_ONOFF_OFF:    *pOn = FALSE;              return TRUE;
+    case ZCL_CMD_ONOFF_TOGGLE: *pOn = cur ? FALSE : TRUE; return TRUE;
+    default:                                              return FALSE;
+    }
+}
+
+/*====================================================================
  * EP6: OnOff 속성 (주행충전 ON/OFF) — 신규 채널
  *
  * [주의] zcl_onOff_register() 는 SDK(zcl_onOff.h/.c) 제공 함수로 가정함.
@@ -335,7 +498,7 @@ static const zclAttrInfo_t analog_attrTbl[] = {
 juntek_onoffAttr_t g_juntek_drvChgAttrs = { .onOff = 0 };
 
 static const zclAttrInfo_t drvChg_attrTbl[] = {
-    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_drvChgAttrs.onOff },
+    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE,                        (u8*)&g_juntek_drvChgAttrs.onOff },
     { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,  ACCESS_CONTROL_READ,                             (u8*)&zcl_attr_global_clusterRevision },
 };
 #define ZCL_DRVCHG_ATTR_NUM  (sizeof(drvChg_attrTbl) / sizeof(zclAttrInfo_t))
@@ -350,46 +513,20 @@ status_t juntek_drvChgCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPa
     (void)pAddrInfo; (void)cmdPayload;
     bool on;
 
-    switch (cmdId) {
-    case ZCL_CMD_ONOFF_ON:
-        on = TRUE;
-        break;
-    case ZCL_CMD_ONOFF_OFF:
-        on = FALSE;
-        break;
-    case ZCL_CMD_ONOFF_TOGGLE:
-        on = g_juntek_drvChgAttrs.onOff ? FALSE : TRUE;
-        break;
-    default:
-        return ZCL_STA_SUCCESS;
+    if (!onoff_cmd_to_state(cmdId, g_juntek_drvChgAttrs.onOff, &on)) {
+        return ZCL_STA_UNSUP_CLUSTER_COMMAND;
     }
 
+    u8 prev = g_juntek_drvChgAttrs.onOff;
     g_juntek_drvChgAttrs.onOff = on ? 1 : 0;
-    printf("[EP6 drvChg] cb hit, cmdId=0x%02x -> onOff=%d -> PD2\r\n",
-           cmdId, g_juntek_drvChgAttrs.onOff);
+    DBG_LOG("[EP6 drvChg] cmdId=0x%02x -> onOff=%d -> PD2\r\n",
+            cmdId, g_juntek_drvChgAttrs.onOff);
     relay_drvchg_set(on);
 
-    /* [추가] 상태 변경을 코디네이터에 즉시 보고
-     * juntek_attrs_update()의 EP1~5 리포트와 달리 EP6/EP7은 명령이
-     * 들어올 때만 상태가 바뀌므로, 콜백 안에서 바로 리포트를 보낸다.
-     * 이게 없으면 configureReporting을 걸어도 실제 리포트를 보내는
-     * 코드가 없어 HA/Z2M이 상태 변화를 전혀 알 수 없었다. */
-    {
-        epInfo_t dstEp;
-        TL_SETSTRUCTCONTENT(dstEp, 0);
-        dstEp.dstAddrMode = APS_SHORT_DSTADDR_WITHEP;
-        dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
-        dstEp.dstEp = 1;
-        dstEp.profileId = HA_PROFILE_ID;
-
-        zcl_report(JUNTEK_ENDPOINT_DRVCHG, &dstEp, TRUE,
-                   ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
-                   MANUFACTURER_CODE_NONE,
-                   ZCL_CLUSTER_GEN_ON_OFF,
-                   ZCL_ATTRID_ONOFF,
-                   ZCL_DATA_TYPE_BOOLEAN,
-                   &g_juntek_drvChgAttrs.onOff);
+    if (prev != g_juntek_drvChgAttrs.onOff) {
+        juntek_relay_state_save();          /* [추가] 재부팅 복원용 */
     }
+    juntek_relay_report(JUNTEK_ENDPOINT_DRVCHG);
 
     return ZCL_STA_SUCCESS;
 }
@@ -401,53 +538,31 @@ status_t juntek_drvChgCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPa
 juntek_onoffAttr_t g_juntek_chgCurAttrs = { .onOff = 0 };
 
 static const zclAttrInfo_t chgCur_attrTbl[] = {
-    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_WRITE | ACCESS_CONTROL_REPORTABLE, (u8*)&g_juntek_chgCurAttrs.onOff },
+    { ZCL_ATTRID_ONOFF,                   ZCL_DATA_TYPE_BOOLEAN, ACCESS_CONTROL_READ | ACCESS_CONTROL_REPORTABLE,                        (u8*)&g_juntek_chgCurAttrs.onOff },
     { ZCL_ATTRID_GLOBAL_CLUSTER_REVISION, ZCL_DATA_TYPE_UINT16,  ACCESS_CONTROL_READ,                             (u8*)&zcl_attr_global_clusterRevision },
 };
 #define ZCL_CHGCUR_ATTR_NUM  (sizeof(chgCur_attrTbl) / sizeof(zclAttrInfo_t))
 
-/* [수정] EP6와 동일한 이유로 cmdId 기반으로 직접 판단 */
+/* EP6 과 동일 — cmdId 로 직접 판단, 변경 시 NV 저장 + 보고 */
 status_t juntek_chgCurCb(zclIncomingAddrInfo_t *pAddrInfo, u8 cmdId, void *cmdPayload)
 {
     (void)pAddrInfo; (void)cmdPayload;
     bool on;
 
-    switch (cmdId) {
-    case ZCL_CMD_ONOFF_ON:
-        on = TRUE;
-        break;
-    case ZCL_CMD_ONOFF_OFF:
-        on = FALSE;
-        break;
-    case ZCL_CMD_ONOFF_TOGGLE:
-        on = g_juntek_chgCurAttrs.onOff ? FALSE : TRUE;
-        break;
-    default:
-        return ZCL_STA_SUCCESS;
+    if (!onoff_cmd_to_state(cmdId, g_juntek_chgCurAttrs.onOff, &on)) {
+        return ZCL_STA_UNSUP_CLUSTER_COMMAND;
     }
 
+    u8 prev = g_juntek_chgCurAttrs.onOff;
     g_juntek_chgCurAttrs.onOff = on ? 1 : 0;
-    printf("[EP7 chgCur] cb hit, cmdId=0x%02x -> onOff=%d -> PC3\r\n",
-           cmdId, g_juntek_chgCurAttrs.onOff);
+    DBG_LOG("[EP7 chgCur] cmdId=0x%02x -> onOff=%d -> PC3\r\n",
+            cmdId, g_juntek_chgCurAttrs.onOff);
     relay_chgcur_set(on);
 
-    /* [추가] 상태 변경을 코디네이터에 즉시 보고 — EP6와 동일한 이유 */
-    {
-        epInfo_t dstEp;
-        TL_SETSTRUCTCONTENT(dstEp, 0);
-        dstEp.dstAddrMode = APS_SHORT_DSTADDR_WITHEP;
-        dstEp.dstAddr.shortAddr = 0x0000;  /* 코디네이터 */
-        dstEp.dstEp = 1;
-        dstEp.profileId = HA_PROFILE_ID;
-
-        zcl_report(JUNTEK_ENDPOINT_CHGCUR, &dstEp, TRUE,
-                   ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
-                   MANUFACTURER_CODE_NONE,
-                   ZCL_CLUSTER_GEN_ON_OFF,
-                   ZCL_ATTRID_ONOFF,
-                   ZCL_DATA_TYPE_BOOLEAN,
-                   &g_juntek_chgCurAttrs.onOff);
+    if (prev != g_juntek_chgCurAttrs.onOff) {
+        juntek_relay_state_save();          /* [추가] 재부팅 복원용 */
     }
+    juntek_relay_report(JUNTEK_ENDPOINT_CHGCUR);
 
     return ZCL_STA_SUCCESS;
 }
@@ -461,6 +576,7 @@ static const u16 ep1_inClusterList[] = {
     ZCL_CLUSTER_GEN_BASIC,
     ZCL_CLUSTER_GEN_IDENTIFY,
     ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   /* 0x0B04 — 표준 Electrical Measurement */
+    ZCL_CLUSTER_JUNTEK_FILTER,               /* [추가] 0xFF00 — 필터 설정 (등록은 돼 있었으나 디스크립터에 없었음) */
 };
 static const u16 ep1_outClusterList[] = {
 #if ZCL_OTA_SUPPORT
@@ -594,10 +710,14 @@ static const zcl_specClusterInfo_t g_clusterList_ep1[] = {
     { ZCL_CLUSTER_GEN_BASIC,                   MANUFACTURER_CODE_NONE, ZCL_BASIC_ATTR_NUM,      basic_attrTbl,    zcl_basic_register,    (void*)juntek_basicCb    },
     { ZCL_CLUSTER_GEN_IDENTIFY,                MANUFACTURER_CODE_NONE, ZCL_IDENTIFY_ATTR_NUM,   identify_attrTbl, zcl_identify_register, (void*)juntek_identifyCb },
     { ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,   MANUFACTURER_CODE_NONE, ZCL_ELEC_ATTR_NUM,       elec_attrTbl,     elec_register,         NULL                     },
-    { ZCL_CLUSTER_JUNTEK_FILTER,               MANUFACTURER_CODE_NONE, ZCL_FILTER_ATTR_NUM_DEF, filter_attrTbl,   filter_register,       (void*)filter_cfg_writeCb},
-#if ZCL_OTA_SUPPORT
-    { ZCL_CLUSTER_OTA,                         MANUFACTURER_CODE_NONE, 0,                       NULL,             zcl_ota_register,      NULL                     },
-#endif
+    { ZCL_CLUSTER_JUNTEK_FILTER,               MANUFACTURER_CODE_NONE, ZCL_FILTER_ATTR_NUM_DEF, filter_attrTbl,   filter_register,       NULL                     },
+    /* [수정] OTA 클러스터는 여기서 등록하지 않음.
+     *  ota_init() 이 SDK 의 g_otaClusterList(ota_attrTbl + zcl_otaCb)로 직접 등록한다.
+     *  여기에 (속성 0개, 콜백 NULL)로 먼저 등록하면 이 빈 항목이 먼저 검색되어
+     *   - genOta 속성 읽기 → UNSUPPORTED_ATTRIBUTE
+     *   - Image Notify     → clusterAppCb 없음 → ZCL_STA_FAILURE 즉시 응답
+     *  이 되어 Z2M OTA 가 "Device didn't respond to OTA request" 로 즉시 실패했음.
+     *  (simple descriptor 의 OUT 클러스터 목록에는 ZCL_CLUSTER_OTA 유지) */
 };
 
 /* EP2: Temperature */
@@ -678,11 +798,11 @@ void juntek_attrs_init(void)
 
     for (i = 0; i < 6; i++) g_juntek_meteringAttrs.currentSummation[i] = 0;
     g_juntek_analogAttrs.presentValue = 0.0f;
-    g_juntek_drvChgAttrs.onOff = 0;
-    g_juntek_chgCurAttrs.onOff = 0;
-
     /* 필터 설정 NV 로드 */
     juntek_filter_cfg_load();
+
+    /* [수정] EP6/EP7 릴레이 — 0 으로 초기화하던 것을 NV 복원으로 변경 */
+    juntek_relay_state_restore();
 }
 
 /*====================================================================
@@ -703,6 +823,14 @@ void juntek_attrs_update(const juntek_data_t *d)
         float cur_abs = (d->current < 0.0f) ? -d->current : d->current;
         g_juntek_elecAttrs.measuredVoltage  = (u16)(d->voltage  * 100.0f);   /* 0.01V 단위 */
         g_juntek_elecAttrs.measuredCurrent  = (u16)(cur_abs     * 100.0f);  /* 0.01A 단위(절댓값) */
+        /* [추가] 부호 있는 전류 (방전 -). 반올림 후 INT16 범위로 제한 */
+        {
+            float c100 = d->current * 100.0f;
+            c100 += (c100 < 0.0f) ? -0.5f : 0.5f;
+            if (c100 >  32767.0f) c100 =  32767.0f;
+            if (c100 < -32768.0f) c100 = -32768.0f;
+            g_juntek_elecAttrs.dcCurrent = (s16)c100;
+        }
     }
     g_juntek_elecAttrs.activePower      = (s16)(d->power);               /* 1W 단위 */
 
@@ -741,8 +869,10 @@ void juntek_attrs_update(const juntek_data_t *d)
     //       (int)d->elapsed_min,
     //       d->relay ? "CHG" : "DCH");
 
-    /* ZCL 리포팅 — 5초마다 코디네이터로 직접 전송 */
-    {
+    /* ZCL 리포팅 — 5초마다 코디네이터로 직접 전송
+     * [수정] JUNTEK_MANUAL_REPORT 로 끌 수 있게 하고, 미가입 상태에서는 보내지 않음 */
+#if JUNTEK_MANUAL_REPORT
+    if (zb_isDeviceJoinedNwk()) {
         static u32 s_last_report_tick = 0;
         u32 now = clock_time();
 
@@ -764,7 +894,7 @@ void juntek_attrs_update(const juntek_data_t *d)
                        MANUFACTURER_CODE_NONE,
                        ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
                        ZCL_ATTRID_ELECTRICAL_MEAS_RMS_VOLTAGE,
-                       ZCL_DATA_TYPE_INT16,
+                       ZCL_DATA_TYPE_UINT16,   /* [수정] 속성 테이블(UINT16)과 타입 일치 */
                        (u8*)&g_juntek_elecAttrs.measuredVoltage);
 
             /* EP1: Current */
@@ -773,8 +903,17 @@ void juntek_attrs_update(const juntek_data_t *d)
                        MANUFACTURER_CODE_NONE,
                        ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
                        ZCL_ATTRID_ELECTRICAL_MEAS_RMS_CURRENT,
-                       ZCL_DATA_TYPE_INT16,
+                       ZCL_DATA_TYPE_UINT16,   /* [수정] 속성 테이블(UINT16)과 타입 일치 */
                        (u8*)&g_juntek_elecAttrs.measuredCurrent);
+
+            /* EP1: DC Current (부호 있음) [추가] */
+            zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE,
+                       ZCL_FRAME_SERVER_CLIENT_DIR, zcl_seqNum++,
+                       MANUFACTURER_CODE_NONE,
+                       ZCL_CLUSTER_MS_ELECTRICAL_MEASUREMENT,
+                       ZCL_ATTRID_ELECTRICAL_MEAS_DC_CURRENT,
+                       ZCL_DATA_TYPE_INT16,
+                       (u8*)&g_juntek_elecAttrs.dcCurrent);
 
             /* EP1: Power */
             zcl_report(JUNTEK_ENDPOINT_ELEC, &dstEp, TRUE,
@@ -825,4 +964,5 @@ void juntek_attrs_update(const juntek_data_t *d)
                        (u8*)&g_juntek_analogAttrs.presentValue);
         }
     }
+#endif
 }
